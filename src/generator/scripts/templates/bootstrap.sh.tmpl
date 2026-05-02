@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+# This script bootstraps the Hyperledger Fabric binaries and docker images
+# based on the configuration selected in the Network Builder.
+
+ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
+cd ${ROOTDIR}
+
+FABRIC_VERSION="{{ .FabricVersion }}"
+CA_VERSION="1.5.12"
+
+echo "=== Bootstrapping Fabric ${FABRIC_VERSION} ==="
+
+# Download the official install script
+# We run it from the network root so bin/ and config/ folders are created there.
+# We explicitly only download 'binary' and 'docker' to prevent cloning fabric-samples.
+curl -sSL https://raw.githubusercontent.com/hyperledger/fabric/main/scripts/install-fabric.sh | bash -s -- --fabric-version ${FABRIC_VERSION} --ca-version ${CA_VERSION} binary docker
+
+echo "=== Bootstrap Complete ==="
+echo "Binaries are located in: ${ROOTDIR}/bin"
+echo "Docker images have been pulled."

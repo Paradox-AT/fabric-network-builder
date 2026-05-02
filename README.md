@@ -1,48 +1,88 @@
-# Hyperledger Fabric Network Builder
+# 🚀 Hyperledger Fabric Network Builder
 
-An enterprise-grade CLI wizard for scaffolding Hyperledger Fabric networks. This tool automates the generation of complex network artifacts including cryptographic material configurations, channel transaction profiles, and docker orchestration manifests.
+An enterprise-grade, **Sovereign Architecture** CLI tool for scaffolding production-ready Hyperledger Fabric networks. This tool automates the entire lifecycle of a blockchain network, from identity generation to container orchestration and channel creation.
 
-## Key Features
+## 🏛️ Sovereign Architecture
 
-- **Interactive Wizard**: A beautiful, terminal-based multi-page form powered by `charmbracelet/huh`.
-- **Enterprise Topology**: Unified organization model allowing organizations to own both peers and orderers.
-- **Consensus Validation**: Built-in verification for CFT (Raft) and BFT (SmartBFT) node counts (e.g., enforcing the `3f+1` rule).
-- **Test-Network Compliance**: Generates folder structures and YAML files that strictly follow the official `fabric-samples/test-network` conventions.
-- **Heavily Documented Artifacts**: Injects official Fabric documentation blocks into all generated YAML files.
-- **State Persistence**: Saves your configuration to `network-config.json`, allowing you to resume, modify, or back up previous sessions.
-- **Dynamic Port Mapping**: Automatically handles port collisions by assigning predictable ranges per organization.
+Unlike the generic `test-network`, this builder implements a **Modular Sovereignty** model:
+- **Independent Organizations**: Each organization is self-contained with its own `identity-config`, `identities`, and `compose` manifests.
+- **Centralized Hub**: Orchestration is managed via a root-level hub that aggregates organizational infrastructure using Docker Compose `include`.
+- **Environment Isolation**: Absolute pathing ensures scripts work from any directory.
 
-## Quick Start
+## ✨ Key Features
 
-### Prerequisites
-- Go 1.21+
-- Hyperledger Fabric Binaries (for executing the generated artifacts)
-- Docker & Docker Compose
+- **Interactive Wizard**: A beautiful terminal UI for complex network configuration.
+- **Automated Bootstrapping**: One-command initialization for Fabric binaries and Docker images.
+- **Smart Pathing**: Intelligent `${ROOTDIR}` resolution for robust lifecycle management.
+- **State Persistence**: Configuration is saved to `network-config.json` for easy regeneration.
+- **Advanced Networking**: Automated port mapping (10000+ for Peers, 20000+ for Orderers).
 
-### Running the Builder
+## 📋 Prerequisites
+
+Before you begin, ensure you have the following installed:
+- **Go**: 1.21 or higher
+- **Docker**: 24.0+
+- **Docker Compose**: V2.20+
+- **Bash**: 4.0+
+- **Git** & **curl**: For bootstrapping tools
+
+## 🚦 Quick Start
+
+### 1. Generate the Network
+Run the builder to configure your organizations and consensus:
 ```bash
 go run main.go
 ```
 
-## Folder Structure
+### 2. Bootstrap Environment
+Download the required Fabric binaries and pull Docker images:
+```bash
+./network/network.sh bootstrap
+```
 
-The tool generates artifacts in the `./network` directory:
-- `configtx/`: Contains the `configtx.yaml` channel profile.
-- `organizations/cryptogen/`: Contains individual `crypto-config-*.yaml` files for each organization.
-- `compose/`: Contains `compose-test-net.yaml` for container orchestration.
-- `network-config.json`: Persisted state of your last wizard session.
+### 3. Launch Network
+Bring the entire network up (Orderers, Peers, and Networking):
+```bash
+./network/network.sh up
+```
 
-## Consensus Rules
-The builder strictly enforces network health:
-- **etcdraft (CFT)**: Requires at least 1 orderer node.
-- **SmartBFT (BFT)**: Requires at least 4 orderer nodes and follows the `3f+1` rule (4, 7, 10, etc.).
+### 4. Create a Channel
+Initialize your first channel across all organizations:
+```bash
+./network/network.sh createChannel mychannel
+```
 
-## Development
+## 📁 Directory Structure
 
-The project is modularly structured:
-- `src/cli/`: Interactive wizard logic.
-- `src/config/`: Domain models and IO persistence.
-- `src/generator/`: Polymorphic engines for Crypto, Configtx, and Docker manifests.
+```text
+network/
+├── bin/                  # Fabric binaries (after bootstrap)
+├── channel-artifacts/    # Genesis blocks and channel transactions
+├── compose/              # Centralized orchestration hub
+├── configtx/             # Global channel profiles
+├── organizations/        # Sovereign organizational data
+│   └── {orgName}/
+│       ├── compose/      # Org-specific docker manifests
+│       ├── identities/   # Generated certificates (MSP/TLS)
+│       └── identity-config/ # Cryptogen/CA configuration
+├── scripts/              # Lifecycle automation scripts
+└── network.sh            # Main entry point
+```
+
+## 🛠️ Lifecycle Commands
+
+- `./network.sh up`: Generates certs and starts all containers.
+- `./network.sh down`: Stops containers and cleans up artifacts (preserves config).
+- `./network.sh bootstrap`: Downloads Fabric tools and images.
+- `./network.sh createChannel <name>`: Automates channel creation and joining.
+
+## 🧪 Tested With
+
+- **Hyperledger Fabric**: 3.1.4
+- **Fabric CA**: 1.5.12
+- **Go**: 1.21+
+- **Docker**: 24.0+
+- **OS**: Arch Linux
 
 ---
-Built with ❤️ for the Hyperledger Fabric community.
+Built with ❤️ for professional Hyperledger Fabric developers.

@@ -6,29 +6,33 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/charmbracelet/huh"
-
 	"network-builder/src/cli"
 	"network-builder/src/config"
 	"network-builder/src/generator"
 	"network-builder/src/generator/configtx"
 	"network-builder/src/generator/crypto"
 	"network-builder/src/generator/docker"
+	"network-builder/src/generator/scripts"
 )
 
 func main() {
+	fmt.Println("=== Hyperledger Fabric Network Builder ===")
+	fmt.Println("This wizard will help you configure your enterprise blockchain network.")
+	fmt.Println("Use Tab/Shift+Tab to navigate back and forth between pages.")
+
+	configPath := "network-config.json"
 	outputDir := "./network"
-	configPath := filepath.Join(outputDir, "network-config.json")
 
-	var existingCfg *config.NetworkConfig
-
-	// Check if existing config exists
+	// Load existing configuration if available
 	loadedCfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		log.Printf("Warning: Failed to load existing config: %v", err)
+	if err != nil && !os.IsNotExist(err) {
+		log.Fatalf("Error loading configuration: %v", err)
 	}
+
+	var cfg *config.NetworkConfig
+	skipWizard := false
 
 	if loadedCfg != nil {
 		var action string
@@ -37,9 +41,9 @@ func main() {
 				huh.NewSelect[string]().
 					Title("A previous configuration was found. What would you like to do?").
 					Options(
-						huh.NewOption("Make changes to existing config", "modify"),
 						huh.NewOption("Start fresh (overwrite existing config)", "fresh"),
-						huh.NewOption("Back it up and start fresh", "backup"),
+						huh.NewOption("Make changes to existing config", "modify"),
+						huh.NewOption("Reset (Regenerate artifacts from saved config)", "reset"),
 					).
 					Value(&action),
 			),
@@ -54,29 +58,26 @@ func main() {
 		}
 
 		switch action {
-		case "modify":
-			existingCfg = loadedCfg
-		case "backup":
-			backupDir := fmt.Sprintf("./network.backup_%d", time.Now().Unix())
-			err := os.Rename(outputDir, backupDir)
-			if err != nil {
-				log.Fatalf("Failed to backup directory: %v", err)
-			}
-			fmt.Printf("Backed up existing configuration to %s\n", backupDir)
-			// Proceed with existingCfg = nil to start fresh
 		case "fresh":
-			// Proceed with existingCfg = nil to start fresh
+			cfg = nil
+		case "modify":
+			cfg = loadedCfg
+		case "reset":
+			cfg = loadedCfg
+			skipWizard = true
 		}
 	}
 
-	cfg, err := cli.RunWizard(existingCfg)
-	if err != nil {
-		if errors.Is(err, huh.ErrUserAborted) {
-			fmt.Println("\nWizard aborted by user. Exiting gracefully.")
-			os.Exit(0)
+	if !skipWizard {
+		// Run the wizard to collect/update configuration
+		cfg, err = cli.RunWizard(cfg)
+		if err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				fmt.Println("\nAborted.")
+				os.Exit(0)
+			}
+			log.Fatalf("Wizard failed: %v", err)
 		}
-		log.Printf("Wizard failed: %v", err)
-		os.Exit(1)
 	}
 
 	cli.PrintSummary(cfg)
@@ -85,9 +86,20 @@ func main() {
 		crypto.NewCryptogenGenerator(),
 		configtx.NewConfigtxGenerator(),
 		docker.NewDockerComposeGenerator(),
+		scripts.NewScriptsGenerator(),
 	}
 
 	fmt.Println("\n=== Generating Network Artifacts ===")
+
+	// Clean up old artifacts to prevent stale files from previous runs
+	subDirs := []string{"organizations", "configtx", "scripts", "compose"}
+	for _, d := range subDirs {
+		os.RemoveAll(filepath.Join(outputDir, d))
+	}
+	// Also remove top-level scripts if they exist (legacy paths)
+	os.Remove(filepath.Join(outputDir, "network.sh"))
+	os.Remove(filepath.Join(outputDir, "bootstrap.sh"))
+
 	for _, gen := range generators {
 		err := gen.Generate(cfg, outputDir)
 		if err != nil {
@@ -97,8 +109,8 @@ func main() {
 
 	// Save the configuration state for future runs
 	if err := config.SaveConfig(cfg, configPath); err != nil {
-		log.Printf("Warning: Failed to save configuration state: %v", err)
+		log.Printf("Warning: Failed to save configuration: %v", err)
 	}
 
-	fmt.Println("\nGeneration complete. Artifacts are located in:", outputDir)
+	fmt.Printf("\nGeneration complete. Artifacts are located in: %s\n", outputDir)
 }

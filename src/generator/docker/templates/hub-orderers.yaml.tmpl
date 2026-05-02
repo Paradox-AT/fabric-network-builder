@@ -1,0 +1,6 @@
+include:
+{{- range .Orgs }}
+  {{- if gt .OrdererCount 0 }}
+  - path: ../organizations/{{ toLower .Name }}/compose/compose-orderer.yaml
+  {{- end }}
+{{- end }}

@@ -34,6 +34,12 @@ func (g *ConfigtxGenerator) Generate(cfg *config.NetworkConfig, outputDir string
 			}
 			return r
 		},
+		"add": func(a, b int) int {
+			return a + b
+		},
+		"multiply": func(a, b int) int {
+			return a * b
+		},
 		"toLower": strings.ToLower,
 		"nextID": func() int {
 			currentID++

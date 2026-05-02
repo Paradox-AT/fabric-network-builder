@@ -1,0 +1,61 @@
+# Copyright IBM Corp. All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+{{- $org := .Org }}
+{{- $orgIndex := .OrgIndex }}
+{{- $fabricVersion := .FabricVersion }}
+
+volumes:
+{{- range $i, $e := until $org.OrdererCount }}
+  orderer{{$i}}.{{ $org.Domain }}:
+{{- end }}
+
+networks:
+  test:
+    name: fabric_test
+
+services:
+{{- range $i, $e := until $org.OrdererCount }}
+  orderer{{$i}}.{{ $org.Domain }}:
+    container_name: orderer{{$i}}.{{ $org.Domain }}
+    image: hyperledger/fabric-orderer:{{ $fabricVersion }}
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - ORDERER_GENERAL_LISTENADDRESS=0.0.0.0
+      - ORDERER_GENERAL_LISTENPORT=7050
+      - ORDERER_GENERAL_LOCALMSPID={{ $org.MSPID }}
+      - ORDERER_GENERAL_LOCALMSPDIR=/var/hyperledger/orderer/msp
+      - ORDERER_GENERAL_TLS_ENABLED=true
+      - ORDERER_GENERAL_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_CLUSTER_CLIENTCERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_CLUSTER_CLIENTPRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_CLUSTER_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_BOOTSTRAPMETHOD=none
+      - ORDERER_CHANNELPARTICIPATION_ENABLED=true
+      - ORDERER_ADMIN_TLS_ENABLED=true
+      - ORDERER_ADMIN_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_ADMIN_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_ADMIN_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_ADMIN_TLS_CLIENTROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_ADMIN_LISTENADDRESS=0.0.0.0:7053
+      - ORDERER_OPERATIONS_LISTENADDRESS=orderer{{$i}}.{{ $org.Domain }}:9443
+      - ORDERER_METRICS_PROVIDER=prometheus
+    working_dir: /root
+    command: orderer
+    volumes:
+        - ../identities/ordererOrganizations/{{ $org.Domain }}/orderers/orderer{{$i}}.{{ $org.Domain }}/msp:/var/hyperledger/orderer/msp
+        - ../identities/ordererOrganizations/{{ $org.Domain }}/orderers/orderer{{$i}}.{{ $org.Domain }}/tls/:/var/hyperledger/orderer/tls
+        - orderer{{$i}}.{{ $org.Domain }}:/var/hyperledger/production/orderer
+    ports:
+      - {{ calculateOrdererPort $orgIndex $i 7050 }}:7050
+      - {{ calculateOrdererPort $orgIndex $i 7053 }}:7053
+      - {{ calculateOrdererPort $orgIndex $i 9443 }}:9443
+    networks:
+      - test
+{{- end }}

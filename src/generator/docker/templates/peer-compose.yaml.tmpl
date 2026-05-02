@@ -1,0 +1,55 @@
+# Copyright IBM Corp. All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+{{- $org := .Org }}
+{{- $orgIndex := .OrgIndex }}
+{{- $fabricVersion := .FabricVersion }}
+
+volumes:
+{{- range $i, $e := until $org.PeerCount }}
+  peer{{$i}}.{{ $org.Domain }}:
+{{- end }}
+
+networks:
+  test:
+    name: fabric_test
+
+services:
+{{- range $i, $e := until $org.PeerCount }}
+  peer{{$i}}.{{ $org.Domain }}:
+    container_name: peer{{$i}}.{{ $org.Domain }}
+    image: hyperledger/fabric-peer:{{ $fabricVersion }}
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer{{$i}}.{{ $org.Domain }}
+      - CORE_PEER_ADDRESS=peer{{$i}}.{{ $org.Domain }}:7051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
+      - CORE_PEER_CHAINCODEADDRESS=peer{{$i}}.{{ $org.Domain }}:7052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer{{$i}}.{{ $org.Domain }}:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer{{$i}}.{{ $org.Domain }}:7051
+      - CORE_PEER_LOCALMSPID={{ $org.MSPID }}
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_OPERATIONS_LISTENADDRESS=peer{{$i}}.{{ $org.Domain }}:9444
+      - CORE_METRICS_PROVIDER=prometheus
+    volumes:
+      - ../identities/peerOrganizations/{{ $org.Domain }}/peers/peer{{$i}}.{{ $org.Domain }}/msp:/etc/hyperledger/fabric/msp
+      - ../identities/peerOrganizations/{{ $org.Domain }}/peers/peer{{$i}}.{{ $org.Domain }}/tls:/etc/hyperledger/fabric/tls
+      - peer{{$i}}.{{ $org.Domain }}:/var/hyperledger/production
+    working_dir: /root
+    command: peer node start
+    ports:
+      - {{ calculatePeerPort $orgIndex $i 7051 }}:7051
+      - {{ calculatePeerPort $orgIndex $i 9444 }}:9444
+    networks:
+      - test
+{{- end }}

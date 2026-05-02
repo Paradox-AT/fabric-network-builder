@@ -47,10 +47,9 @@ func (g *CryptogenGenerator) Generate(cfg *config.NetworkConfig, outputDir strin
 	}
 
 	// Ensure output directory exists
-	cryptogenDir := filepath.Join(outputDir, "organizations", "cryptogen")
-	err = os.MkdirAll(cryptogenDir, 0755)
+	err = os.MkdirAll(filepath.Join(outputDir, "organizations"), 0755)
 	if err != nil {
-		return fmt.Errorf("failed to create cryptogen output directory: %w", err)
+		return fmt.Errorf("failed to create organizations directory: %w", err)
 	}
 
 	for _, org := range cfg.Orgs {
@@ -60,7 +59,13 @@ func (g *CryptogenGenerator) Generate(cfg *config.NetworkConfig, outputDir strin
 			return fmt.Errorf("failed to execute crypto-config template for org %s: %w", org.Name, err)
 		}
 
-		filePath := filepath.Join(cryptogenDir, fmt.Sprintf("crypto-config-%s.yaml", strings.ToLower(org.Name)))
+		orgDir := filepath.Join(outputDir, "organizations", strings.ToLower(org.Name), "identity-config", "cryptogen")
+		err = os.MkdirAll(orgDir, 0755)
+		if err != nil {
+			return fmt.Errorf("failed to create directory for org %s: %w", org.Name, err)
+		}
+
+		filePath := filepath.Join(orgDir, "crypto-config.yaml")
 		err = os.WriteFile(filePath, buf.Bytes(), 0644)
 		if err != nil {
 			return fmt.Errorf("failed to write crypto-config yaml for org %s: %w", org.Name, err)
