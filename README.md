@@ -74,7 +74,7 @@ network/
 - **Fabric CA**: 1.5.12
 - **Go**: 1.22+
 - **Docker**: 24.0+
-- **OS**: Linux (Optimized for Ubuntu/Arch)
+- **OS**: Arch Linux
 
 ## 🛡️ Security Best Practices
 
