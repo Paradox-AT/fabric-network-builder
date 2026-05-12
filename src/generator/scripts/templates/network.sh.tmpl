@@ -48,7 +48,30 @@ function checkBinaries() {
     infoln "One or more binaries or config files are missing. Running bootstrap..."
     bootstrap
   else
-    infoln "All required binaries and config files found."
+    # 2. Check for version mismatches
+    local version_mismatch=false
+    
+    # Check Fabric version
+    CURRENT_VER=$("${ROOTDIR}/bin/peer" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
+    if [ "${CURRENT_VER}" != "${FABRIC_VERSION}" ]; then
+      warnln "Fabric binary version mismatch: found v${CURRENT_VER}, expected v${FABRIC_VERSION}"
+      version_mismatch=true
+    fi
+
+    # Check CA version if applicable
+    if [ "${CRYPTO}" == "Fabric CA" ]; then
+      CURRENT_CA_VER=$("${ROOTDIR}/bin/fabric-ca-client" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
+      if [ "${CURRENT_CA_VER}" != "${CA_VERSION}" ]; then
+        warnln "Fabric CA binary version mismatch: found v${CURRENT_CA_VER}, expected v${CA_VERSION}"
+        version_mismatch=true
+      fi
+    fi
+
+    if [ "$version_mismatch" = true ]; then
+      warnln "It is highly recommended to run './network/network.sh bootstrap' to sync your binaries."
+    else
+      infoln "All required binaries and config files found (v${FABRIC_VERSION})."
+    fi
   fi
 }
 

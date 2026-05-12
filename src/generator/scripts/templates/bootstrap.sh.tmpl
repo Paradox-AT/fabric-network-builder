@@ -95,15 +95,44 @@ download() {
 # 1. Download and extract binaries
 BINARY_FILE="hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz"
 BINARY_URL="https://github.com/hyperledger/fabric/releases/download/v${FABRIC_VERSION}/${BINARY_FILE}"
-download "Fabric Binaries" "${BINARY_URL}" "${BINARY_FILE}"
-tar -xzf "${BINARY_FILE}"
-rm "${BINARY_FILE}"
 
-CA_BINARY_FILE="hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz"
-CA_BINARY_URL="https://github.com/hyperledger/fabric-ca/releases/download/v${CA_VERSION}/${CA_BINARY_FILE}"
-download "Fabric CA Binaries" "${CA_BINARY_URL}" "${CA_BINARY_FILE}"
-tar -xzf "${CA_BINARY_FILE}"
-rm "${CA_BINARY_FILE}"
+NEED_FABRIC=true
+if [ -f "${ROOTDIR}/bin/peer" ]; then
+  CURRENT_VER=$("${ROOTDIR}/bin/peer" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
+  if [ "${CURRENT_VER}" == "${FABRIC_VERSION}" ]; then
+    echo "==> Fabric binaries (v${CURRENT_VER}) already exist. Skipping download."
+    NEED_FABRIC=false
+  else
+    echo "==> Version mismatch: found v${CURRENT_VER}, need v${FABRIC_VERSION}."
+  fi
+fi
+
+if [ "$NEED_FABRIC" == "true" ]; then
+  download "Fabric Binaries" "${BINARY_URL}" "${BINARY_FILE}"
+  tar -xzf "${BINARY_FILE}"
+  rm "${BINARY_FILE}"
+fi
+
+if [ "${CRYPTO}" == "Fabric CA" ]; then
+  NEED_CA=true
+  if [ -f "${ROOTDIR}/bin/fabric-ca-client" ]; then
+    CURRENT_CA_VER=$("${ROOTDIR}/bin/fabric-ca-client" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
+    if [ "${CURRENT_CA_VER}" == "${CA_VERSION}" ]; then
+      echo "==> Fabric CA binaries (v${CURRENT_CA_VER}) already exist. Skipping download."
+      NEED_CA=false
+    else
+       echo "==> CA Version mismatch: found v${CURRENT_CA_VER}, need v${CA_VERSION}."
+    fi
+  fi
+
+  if [ "$NEED_CA" == "true" ]; then
+    CA_BINARY_FILE="hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz"
+    CA_BINARY_URL="https://github.com/hyperledger/fabric-ca/releases/download/v${CA_VERSION}/${CA_BINARY_FILE}"
+    download "Fabric CA Binaries" "${CA_BINARY_URL}" "${CA_BINARY_FILE}"
+    tar -xzf "${CA_BINARY_FILE}"
+    rm "${CA_BINARY_FILE}"
+  fi
+fi
 
 # 2. Pull Docker Images
 FABRIC_REGISTRY=$(dockerFabricRegistry "${FABRIC_VERSION}")
@@ -112,27 +141,46 @@ CA_REGISTRY=$(dockerCARegistry "${CA_VERSION}")
 echo "=== Pulling Fabric Docker Images from ${FABRIC_REGISTRY} ==="
 for image in peer orderer ccenv baseos; do
   FULL_IMAGE="${FABRIC_REGISTRY}/fabric-${image}:${FABRIC_VERSION}"
-  echo "==> Pulling ${FULL_IMAGE}"
-  docker pull "${FULL_IMAGE}"
+  echo "==> Pulling ${FULL_IMAGE}..."
+  docker pull "${FULL_IMAGE}" > /dev/null 2>&1
   docker tag "${FULL_IMAGE}" "hyperledger/fabric-${image}:${FABRIC_VERSION}"
   docker tag "${FULL_IMAGE}" "hyperledger/fabric-${image}"
 done
 
-echo "=== Pulling Fabric CA Image from ${CA_REGISTRY} ==="
-FULL_CA_IMAGE="${CA_REGISTRY}/fabric-ca:${CA_VERSION}"
-echo "==> Pulling ${FULL_CA_IMAGE}"
-docker pull "${FULL_CA_IMAGE}"
-docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca:${CA_VERSION}"
-docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca"
-
-if [ -n "${COUCHDB_VERSION}" ]; then
-  echo "=== Pulling CouchDB Image ==="
-  echo "==> Pulling couchdb:${COUCHDB_VERSION}"
-  docker pull "couchdb:${COUCHDB_VERSION}"
+if [ "${CRYPTO}" == "Fabric CA" ]; then
+  echo "=== Pulling Fabric CA Image from ${CA_REGISTRY} ==="
+  FULL_CA_IMAGE="${CA_REGISTRY}/fabric-ca:${CA_VERSION}"
+  echo "==> Pulling ${FULL_CA_IMAGE}..."
+  docker pull "${FULL_CA_IMAGE}" > /dev/null 2>&1
+  docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca:${CA_VERSION}"
+  docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca"
+  
+  if [ "${CA_DATABASE_TYPE}" == "postgres" ]; then
+    echo "=== Pulling Postgres Image ==="
+    echo "==> Pulling postgres:${POSTGRES_VERSION}..."
+    docker pull "postgres:${POSTGRES_VERSION}" > /dev/null 2>&1
+  fi
 fi
 
+{{- $anyCouch := false }}
+{{- range $org := .Orgs }}
+  {{- range $i := until .PeerCount }}
+    {{- if eq ($org.PeerStateDatabase $i) "couchdb" }}
+      {{- $anyCouch = true }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{- if $anyCouch }}
+if [ -n "${COUCHDB_VERSION}" ]; then
+  echo "=== Pulling CouchDB Image ==="
+  echo "==> Pulling couchdb:${COUCHDB_VERSION}..."
+  docker pull "couchdb:${COUCHDB_VERSION}" > /dev/null 2>&1
+fi
+{{- end }}
+
 echo "=== Pulling Busybox for utility tasks ==="
-docker pull busybox
+docker pull busybox > /dev/null 2>&1
 
 echo "=== Bootstrap Complete ==="
 echo "Binaries are located in: ${ROOTDIR}/bin"

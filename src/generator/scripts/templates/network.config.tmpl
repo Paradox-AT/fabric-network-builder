@@ -12,6 +12,10 @@ COUCHDB_VERSION="{{ .CouchDBVersion }}"
 # Using crypto vs CA. default is cryptogen
 CRYPTO="{{ .CryptoStrategy }}"
 
+# CA Database settings
+CA_DATABASE_TYPE="{{ .CADatabaseType }}"
+POSTGRES_VERSION="{{ .PostgresVersion }}"
+
 # max number of retries before giving up
 MAX_RETRY=5
 
