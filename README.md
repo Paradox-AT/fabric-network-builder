@@ -1,88 +1,84 @@
-# 🚀 Hyperledger Fabric Network Builder
+# Hyperledger Fabric Network Builder 🚀
 
-An enterprise-grade, **Sovereign Architecture** CLI tool for scaffolding production-ready Hyperledger Fabric networks. This tool automates the entire lifecycle of a blockchain network, from identity generation to container orchestration and channel creation.
+[![Fabric Version](https://img.shields.io/badge/Fabric-3.1.4-blue.svg)](https://hyperledger-fabric.readthedocs.io/)
+[![Fabric CA](https://img.shields.io/badge/Fabric%20CA-1.5.12-green.svg)](https://hyperledger-fabric-ca.readthedocs.io/)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8.svg)](https://go.dev/)
 
-## 🏛️ Sovereign Architecture
+A production-grade, organization-centric CLI wizard for architecting and deploying Hyperledger Fabric 3.1.4 networks. This tool automates the entire lifecycle from identity issuance to channel creation.
 
-Unlike the generic `test-network`, this builder implements a **Modular Sovereignty** model:
-- **Independent Organizations**: Each organization is self-contained with its own `identity-config`, `identities`, and `compose` manifests.
-- **Centralized Hub**: Orchestration is managed via a root-level hub that aggregates organizational infrastructure using Docker Compose `include`.
-- **Environment Isolation**: Absolute pathing ensures scripts work from any directory.
+## ✨ Enterprise Features
 
-## ✨ Key Features
+-   **Modular Identity Management**:
+    *   **Cryptogen**: Rapid development and local testing.
+    *   **Fabric CA**: Production-ready PKI with support for **SQLite** or **PostgreSQL** backends.
+-   **Advanced Consensus**: Built-in validation and generation for **Raft (CFT)** and **SmartBFT (BFT)**.
+-   **Pluggable State Database**: Per-peer selection of **LevelDB** or **CouchDB** (v3.3.3+).
+-   **Modular Orchestration**: Generates organization-specific docker manifests and a centralized "Hub" for total network control.
+-   **Lifecycle Automation**: A robust `network.sh` script that handles:
+    *   Zero-config certificate generation (CA or Cryptogen).
+    *   Multi-stage docker orchestration.
+    *   Automated channel creation, anchor peer updates, and organization joining.
 
-- **Interactive Wizard**: A beautiful terminal UI for complex network configuration.
-- **Automated Bootstrapping**: One-command initialization for Fabric binaries and Docker images.
-- **Smart Pathing**: Intelligent `${ROOTDIR}` resolution for robust lifecycle management.
-- **State Persistence**: Configuration is saved to `network-config.json` for easy regeneration.
-- **Advanced Networking**: Automated port mapping (10000+ for Peers, 20000+ for Orderers).
+## 🚀 Getting Started
 
-## 📋 Prerequisites
-
-Before you begin, ensure you have the following installed:
-- **Go**: 1.21 or higher
-- **Docker**: 24.0+
-- **Docker Compose**: V2.20+
-- **Bash**: 4.0+
-- **Git** & **curl**: For bootstrapping tools
-
-## 🚦 Quick Start
-
-### 1. Generate the Network
-Run the builder to configure your organizations and consensus:
+### 1. Build the Network
+Run the interactive wizard to design your topology:
 ```bash
 go run main.go
 ```
 
-### 2. Bootstrap Environment
-Download the required Fabric binaries and pull Docker images:
+### 2. Bootstrap Binaries
+Download the required Fabric binaries and Docker images:
 ```bash
 ./network/network.sh bootstrap
 ```
 
-### 3. Launch Network
-Bring the entire network up (Orderers, Peers, and Networking):
+### 3. Launch & Deploy
+Bring up the network and create your first channel:
 ```bash
 ./network/network.sh up
-```
-
-### 4. Create a Channel
-Initialize your first channel across all organizations:
-```bash
 ./network/network.sh createChannel mychannel
 ```
 
-## 📁 Directory Structure
+## 📂 Directory Structure
+
+The builder creates a clean, sovereign organizational hierarchy:
 
 ```text
 network/
-├── bin/                  # Fabric binaries (after bootstrap)
-├── channel-artifacts/    # Genesis blocks and channel transactions
-├── compose/              # Centralized orchestration hub
+├── bin/                  # Fabric binaries (post-bootstrap)
+├── compose/              # Centralized Hub orchestration
 ├── configtx/             # Global channel profiles
 ├── organizations/        # Sovereign organizational data
 │   └── {orgName}/
-│       ├── compose/      # Org-specific docker manifests
+│       ├── compose/      # Org-specific docker manifests (Peers/Orderers/CAs)
 │       ├── identities/   # Generated certificates (MSP/TLS)
-│       └── identity-config/ # Cryptogen/CA configuration
-├── scripts/              # Lifecycle automation scripts
-└── network.sh            # Main entry point
+│       ├── identity-config/ # Cryptogen/CA configuration files
+│       └── scripts/      # Org-specific enrollment & registration
+├── scripts/              # Internal lifecycle helpers
+└── network.sh            # Unified entry point
 ```
 
-## 🛠️ Lifecycle Commands
+## 🛠️ Commands Reference
 
-- `./network.sh up`: Generates certs and starts all containers.
-- `./network.sh down`: Stops containers and cleans up artifacts (preserves config).
-- `./network.sh bootstrap`: Downloads Fabric tools and images.
-- `./network.sh createChannel <name>`: Automates channel creation and joining.
+| Command | Description |
+| :--- | :--- |
+| `./network.sh up` | Generates identities and starts all network components. |
+| `./network.sh down` | Stops containers and removes runtime artifacts. |
+| `./network.sh restart` | Quickly bounces the network while preserving volumes. |
+| `./network.sh createChannel` | Automates the genesis-to-join flow for a channel. |
 
-## 🧪 Tested With
+## 🧪 Tested Environment
 
 - **Hyperledger Fabric**: 3.1.4
 - **Fabric CA**: 1.5.12
-- **Go**: 1.21+
+- **Go**: 1.22+
 - **Docker**: 24.0+
-- **OS**: Arch Linux
+- **OS**: Linux (Optimized for Ubuntu/Arch)
+
+## 🛡️ Security Best Practices
+
+The tool is pre-configured with a `.gitignore` that avoids tracking sensitive `identities/` folders while ensuring your **configuration templates** and **wizard state** (network-config.json) are safely versioned.
 
 ---
-Built with ❤️ for professional Hyperledger Fabric developers.
+Built with ❤️ for the Hyperledger Community.

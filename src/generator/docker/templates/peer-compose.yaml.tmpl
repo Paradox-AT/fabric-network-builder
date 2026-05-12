@@ -1,8 +1,3 @@
-# Copyright IBM Corp. All Rights Reserved.
-#
-# SPDX-License-Identifier: Apache-2.0
-#
-
 {{- $org := .Org }}
 {{- $orgIndex := .OrgIndex }}
 {{- $fabricVersion := .FabricVersion }}
@@ -39,11 +34,17 @@ services:
       - CORE_PEER_GOSSIP_BOOTSTRAP=peer{{$i}}.{{ $org.Domain }}:7051
       - CORE_PEER_LOCALMSPID={{ $org.MSPID }}
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_VM_ENDPOINT=unix:///var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=fabric_test
+      - CORE_PEER_GOSSIP_USELEADERELECTION=true
+      - CORE_PEER_GOSSIP_ORGLEADER=false
+      - CORE_PEER_GOSSIP_SKIPHANDSHAKE=true
       - CORE_OPERATIONS_LISTENADDRESS=peer{{$i}}.{{ $org.Domain }}:9444
       - CORE_METRICS_PROVIDER=prometheus
     volumes:
       - ../identities/peerOrganizations/{{ $org.Domain }}/peers/peer{{$i}}.{{ $org.Domain }}/msp:/etc/hyperledger/fabric/msp
       - ../identities/peerOrganizations/{{ $org.Domain }}/peers/peer{{$i}}.{{ $org.Domain }}/tls:/etc/hyperledger/fabric/tls
+      - /var/run/docker.sock:/var/run/docker.sock
       - peer{{$i}}.{{ $org.Domain }}:/var/hyperledger/production
     working_dir: /root
     command: peer node start

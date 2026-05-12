@@ -1,0 +1,53 @@
+{{- $org := .Org }}
+{{- $i := .OrgIndex }}
+
+volumes:
+  ca.{{ $org.Domain }}:
+
+networks:
+  test:
+    name: fabric_test
+
+services:
+  {{- if eq $.CADatabaseType "postgres" }}
+  db.ca.{{ $org.Domain }}:
+    container_name: db.ca.{{ $org.Domain }}
+    image: postgres:{{ $.PostgresVersion }}
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - POSTGRES_USER=ca_admin
+      - POSTGRES_PASSWORD=ca_admin_pw
+      - POSTGRES_DB=fabric_ca
+    ports:
+      - {{ calculateDatabasePort $i 5432 }}:5432
+    networks:
+      - test
+
+  {{- end }}
+  ca.{{ $org.Domain }}:
+    container_name: ca.{{ $org.Domain }}
+    image: hyperledger/fabric-ca:{{ $.CAVersion }}
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - FABRIC_CA_SERVER_HOME=/etc/hyperledger/fabric-ca-server
+      - FABRIC_CA_SERVER_CA_NAME={{ $org.CAName }}
+      - FABRIC_CA_SERVER_TLS_ENABLED=true
+      - FABRIC_CA_SERVER_PORT=7054
+      {{- if eq $.CADatabaseType "postgres" }}
+      - FABRIC_CA_SERVER_DB_TYPE=postgres
+      - FABRIC_CA_SERVER_DB_DATASOURCE=host=db.ca.{{ $org.Domain }} port=5432 user=ca_admin password=ca_admin_pw dbname=fabric_ca sslmode=disable
+      {{- end }}
+    ports:
+      - {{ calculateCAPort $i 7054 }}:7054
+    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
+    volumes:
+      - ca.{{ $org.Domain }}:/etc/hyperledger/fabric-ca-server
+      - ../identity-config/ca/fabric-ca-server-config.yaml:/etc/hyperledger/fabric-ca-server/fabric-ca-server-config.yaml
+    networks:
+      - test
+    {{- if eq $.CADatabaseType "postgres" }}
+    depends_on:
+      - db.ca.{{ $org.Domain }}
+    {{- end }}

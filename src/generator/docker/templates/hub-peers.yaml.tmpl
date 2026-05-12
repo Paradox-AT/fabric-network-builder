@@ -2,5 +2,8 @@ include:
 {{- range .Orgs }}
   {{- if gt .PeerCount 0 }}
   - path: ../organizations/{{ toLower .Name }}/compose/compose-peer.yaml
+  {{- if orgHasCouchDB . }}
+  - path: ../organizations/{{ toLower .Name }}/compose/compose-couch.yaml
+  {{- end }}
   {{- end }}
 {{- end }}

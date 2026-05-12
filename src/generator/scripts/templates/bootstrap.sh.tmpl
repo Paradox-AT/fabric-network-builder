@@ -4,17 +4,135 @@
 # based on the configuration selected in the Network Builder.
 
 ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
-cd ${ROOTDIR}
+. ${ROOTDIR}/network.config
 
-FABRIC_VERSION="{{ .FabricVersion }}"
-CA_VERSION="1.5.12"
+# Detect OS and Architecture
+OS_NAME=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "${OS_NAME}" in
+  darwin)
+    OS_NAME=darwin
+    ;;
+  linux)
+    OS_NAME=linux
+    ;;
+  *)
+    echo "Unknown, unsupported OS: ${OS_NAME}"
+    exit 1
+    ;;
+esac
 
-echo "=== Bootstrapping Fabric ${FABRIC_VERSION} ==="
+ARCH=$(uname -m)
+case "${ARCH}" in
+  x86_64)
+    ARCH=amd64
+    ;;
+  aarch64 | arm64)
+    ARCH=arm64
+    ;;
+  *)
+    echo "Unknown, unsupported architecture: ${ARCH}"
+    exit 1
+    ;;
+esac
 
-# Download the official install script
-# We run it from the network root so bin/ and config/ folders are created there.
-# We explicitly only download 'binary' and 'docker' to prevent cloning fabric-samples.
-curl -sSL https://raw.githubusercontent.com/hyperledger/fabric/main/scripts/install-fabric.sh | bash -s -- --fabric-version ${FABRIC_VERSION} --ca-version ${CA_VERSION} binary docker
+echo "=== Detected Platform: ${OS_NAME}-${ARCH} ==="
+
+# Registry detection logic from official install-fabric.sh
+dockerFabricRegistry() {
+  local version=$1
+  # Remove trailing pre-release or metadata identifiers
+  version="${version%%[-+]*}"
+  case "${version}" in
+    1.*|2.[0-4].*|2.5.[0-9]|2.5.10|3.0.0)
+      echo -n "docker.io/hyperledger"
+      ;;
+    *)
+      echo -n "ghcr.io/hyperledger"
+      ;;
+  esac
+}
+
+dockerCARegistry() {
+  local version=$1
+  version="${version%%[-+]*}"
+  case "${version}" in
+    1.[0-4].*|1.5.[0-9]|1.5.1[0-4])
+      echo -n "docker.io/hyperledger"
+      ;;
+    *)
+      echo -n "ghcr.io/hyperledger"
+      ;;
+  esac
+}
+
+# Prior to fabric 2.5, use amd64 binaries on darwin-arm64
+if [ "${OS_NAME}" == "darwin" ] && [ "${ARCH}" == "arm64" ]; then
+  if [[ ${FABRIC_VERSION} =~ ^2\.[0-4]\.* ]]; then
+    echo "==> Falling back to amd64 binaries for Fabric ${FABRIC_VERSION} on Darwin ARM64"
+    ARCH=amd64
+  fi
+fi
+
+PLATFORM=${OS_NAME}-${ARCH}
+
+download() {
+  local LABEL=$1
+  local URL=$2
+  local FILE=$3
+
+  if [ -f "${FILE}" ]; then
+    echo "==> ${LABEL} already downloaded."
+  else
+    echo "==> Downloading ${LABEL}..."
+    curl -L --retry 5 --retry-delay 3 "${URL}" -o "${FILE}"
+    if [ $? -ne 0 ]; then
+      echo "Error downloading ${URL}"
+      exit 1
+    fi
+  fi
+}
+
+# 1. Download and extract binaries
+BINARY_FILE="hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz"
+BINARY_URL="https://github.com/hyperledger/fabric/releases/download/v${FABRIC_VERSION}/${BINARY_FILE}"
+download "Fabric Binaries" "${BINARY_URL}" "${BINARY_FILE}"
+tar -xzf "${BINARY_FILE}"
+rm "${BINARY_FILE}"
+
+CA_BINARY_FILE="hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz"
+CA_BINARY_URL="https://github.com/hyperledger/fabric-ca/releases/download/v${CA_VERSION}/${CA_BINARY_FILE}"
+download "Fabric CA Binaries" "${CA_BINARY_URL}" "${CA_BINARY_FILE}"
+tar -xzf "${CA_BINARY_FILE}"
+rm "${CA_BINARY_FILE}"
+
+# 2. Pull Docker Images
+FABRIC_REGISTRY=$(dockerFabricRegistry "${FABRIC_VERSION}")
+CA_REGISTRY=$(dockerCARegistry "${CA_VERSION}")
+
+echo "=== Pulling Fabric Docker Images from ${FABRIC_REGISTRY} ==="
+for image in peer orderer ccenv baseos; do
+  FULL_IMAGE="${FABRIC_REGISTRY}/fabric-${image}:${FABRIC_VERSION}"
+  echo "==> Pulling ${FULL_IMAGE}"
+  docker pull "${FULL_IMAGE}"
+  docker tag "${FULL_IMAGE}" "hyperledger/fabric-${image}:${FABRIC_VERSION}"
+  docker tag "${FULL_IMAGE}" "hyperledger/fabric-${image}"
+done
+
+echo "=== Pulling Fabric CA Image from ${CA_REGISTRY} ==="
+FULL_CA_IMAGE="${CA_REGISTRY}/fabric-ca:${CA_VERSION}"
+echo "==> Pulling ${FULL_CA_IMAGE}"
+docker pull "${FULL_CA_IMAGE}"
+docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca:${CA_VERSION}"
+docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca"
+
+if [ -n "${COUCHDB_VERSION}" ]; then
+  echo "=== Pulling CouchDB Image ==="
+  echo "==> Pulling couchdb:${COUCHDB_VERSION}"
+  docker pull "couchdb:${COUCHDB_VERSION}"
+fi
+
+echo "=== Pulling Busybox for utility tasks ==="
+docker pull busybox
 
 echo "=== Bootstrap Complete ==="
 echo "Binaries are located in: ${ROOTDIR}/bin"

@@ -21,78 +21,32 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 	var cfg *config.NetworkConfig
 	var orgCountStr string
 	var channelCountStr string
-	const maxOrgs = 10
-	ordererNodeCounts := make([]string, maxOrgs)
-	peerNodeCounts := make([]string, maxOrgs)
 
 	if existingCfg != nil {
 		cfg = existingCfg
 		orgCountStr = strconv.Itoa(len(cfg.Orgs))
 		channelCountStr = strconv.Itoa(cfg.ChannelCount)
-
-		// Pad existing orgs to maxOrgs so the form has enough fields
-		for i := len(cfg.Orgs); i < maxOrgs; i++ {
-			cfg.Orgs = append(cfg.Orgs, config.OrgConfig{
-				Name:   fmt.Sprintf("Org%d", i+1),
-				MSPID:  fmt.Sprintf("Org%dMSP", i+1),
-				Domain: fmt.Sprintf("org%d.example.com", i+1),
-				CAName: fmt.Sprintf("ca.org%d.example.com", i+1),
-			})
-		}
-		
-		for i := 0; i < maxOrgs; i++ {
-			if i < len(existingCfg.Orgs) && i < cap(existingCfg.Orgs) && existingCfg.Orgs[i].OrdererCount > 0 { // Just populate counts based on what exists
-                ordererNodeCounts[i] = strconv.Itoa(cfg.Orgs[i].OrdererCount)
-            } else if i < len(existingCfg.Orgs) && existingCfg.Orgs[i].OrdererCount == 0 && existingCfg.Orgs[i].PeerCount > 0 {
-				ordererNodeCounts[i] = "0"
-			} else {
-				ordererNodeCounts[i] = "1"
-			}
-
-			if i < len(existingCfg.Orgs) && i < cap(existingCfg.Orgs) && existingCfg.Orgs[i].PeerCount > 0 {
-                peerNodeCounts[i] = strconv.Itoa(cfg.Orgs[i].PeerCount)
-            } else if i < len(existingCfg.Orgs) && existingCfg.Orgs[i].PeerCount == 0 && existingCfg.Orgs[i].OrdererCount > 0 {
-				peerNodeCounts[i] = "0"
-			} else {
-				peerNodeCounts[i] = "2"
-			}
-		}
-
 	} else {
 		cfg = &config.NetworkConfig{
 			NetworkName:      "fabric-network",
 			FabricVersion:    "3.1.4",
+			CAVersion:        "1.5.12",
+			CouchDBVersion:   "3.3.3",
+			CADatabaseType:   "sqlite",
+			PostgresVersion:  "16.2",
 			OrdererType:      "etcdraft",
 			CryptoStrategy:   "cryptogen",
-			StateDatabase:    "LevelDB",
 			DeploymentTarget: "Docker Compose",
 			ChaincodeMode:    "Embedded",
 			ChannelCount:     1,
 		}
-
 		orgCountStr = "3"
 		channelCountStr = "1"
-
-		cfg.Orgs = make([]config.OrgConfig, maxOrgs)
-
-		for i := 0; i < maxOrgs; i++ {
-			cfg.Orgs[i] = config.OrgConfig{
-				Name:   fmt.Sprintf("Org%d", i+1),
-				MSPID:  fmt.Sprintf("Org%dMSP", i+1),
-				Domain: fmt.Sprintf("org%d.example.com", i+1),
-				CAName: fmt.Sprintf("ca.org%d.example.com", i+1),
-			}
-			// Default to 1 orderer and 2 peers per org
-			ordererNodeCounts[i] = "1"
-			peerNodeCounts[i] = "2"
-		}
 	}
 
 	for {
-		groups := []*huh.Group{}
-
-		// 1. General Network Setup (Split into 4 pages for readability)
-		groups = append(groups,
+		// 1. Global Network Setup
+		err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title("What is the name of your network?").
@@ -104,8 +58,26 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 						return nil
 					}),
 				huh.NewInput().
-					Title("Which Fabric Version will you use?").
+					Title("Fabric Version:").
 					Value(&cfg.FabricVersion).
+					Validate(func(s string) error {
+						if strings.TrimSpace(s) == "" {
+							return errors.New("required")
+						}
+						return nil
+					}),
+				huh.NewInput().
+					Title("Fabric CA Version (if used):").
+					Value(&cfg.CAVersion).
+					Validate(func(s string) error {
+						if strings.TrimSpace(s) == "" {
+							return errors.New("required")
+						}
+						return nil
+					}),
+				huh.NewInput().
+					Title("CouchDB Version (if used):").
+					Value(&cfg.CouchDBVersion).
 					Validate(func(s string) error {
 						if strings.TrimSpace(s) == "" {
 							return errors.New("required")
@@ -117,10 +89,12 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 				huh.NewSelect[string]().
 					Title("Choose the ordering service consensus type:").
 					Options(
-						huh.NewOption("etcdraft", "CFT"),
-						huh.NewOption("SmartBFT", "BFT"),
+						huh.NewOption("Raft (CFT)", "etcdraft"),
+						huh.NewOption("SmartBFT (BFT)", "BFT"),
 					).
 					Value(&cfg.OrdererType),
+			),
+			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Choose the cryptographic material strategy:").
 					Options(
@@ -131,12 +105,23 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 			),
 			huh.NewGroup(
 				huh.NewSelect[string]().
-					Title("Which state database will you use?").
+					Title("Choose the CA database type:").
 					Options(
-						huh.NewOption("LevelDB (Default, Key-Value)", "LevelDB"),
-						huh.NewOption("CouchDB (Rich JSON Queries)", "CouchDB"),
+						huh.NewOption("SQLite (Embedded, testing)", "sqlite"),
+						huh.NewOption("PostgreSQL (External, production)", "postgres"),
 					).
-					Value(&cfg.StateDatabase),
+					Value(&cfg.CADatabaseType),
+			).WithHideFunc(func() bool {
+				return cfg.CryptoStrategy != "Fabric CA"
+			}),
+			huh.NewGroup(
+				huh.NewInput().
+					Title("PostgreSQL Version:").
+					Value(&cfg.PostgresVersion),
+			).WithHideFunc(func() bool {
+				return cfg.CADatabaseType != "postgres" || cfg.CryptoStrategy != "Fabric CA"
+			}),
+			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("What is your deployment target?").
 					Options(
@@ -154,126 +139,144 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 			),
 			huh.NewGroup(
 				huh.NewInput().
-					Title("How many Organizations will participate in the network? (Max 10)").
+					Title("How many Organizations will participate in the network?").
 					Value(&orgCountStr).
 					Validate(func(s string) error {
 						v, err := strconv.Atoi(s)
-						if err != nil || v <= 0 || v > 10 {
-							return errors.New("must be between 1 and 10")
+						if err != nil || v <= 0 {
+							return errors.New("must be a positive number")
 						}
 						return nil
 					}),
 			),
-		)
-
-		// 2. Organization Setup (Dynamic pages)
-		for i := 0; i < maxOrgs; i++ {
-			idx := i // Capture loop variable
-			groups = append(groups, huh.NewGroup(
+			huh.NewGroup(
 				huh.NewInput().
-					Title(fmt.Sprintf("[Org %d] Organization Name:", idx+1)).
-					Value(&cfg.Orgs[idx].Name).
-					Validate(func(s string) error {
-						if strings.TrimSpace(s) == "" {
-							return errors.New("required")
-						}
-						return nil
-					}),
-				huh.NewInput().
-					Title(fmt.Sprintf("[Org %d] MSP ID:", idx+1)).
-					Value(&cfg.Orgs[idx].MSPID).
-					Validate(func(s string) error {
-						if strings.TrimSpace(s) == "" {
-							return errors.New("required")
-						}
-						return nil
-					}),
-				huh.NewInput().
-					Title(fmt.Sprintf("[Org %d] Base Domain:", idx+1)).
-					Value(&cfg.Orgs[idx].Domain).
-					Validate(func(s string) error {
-						if strings.TrimSpace(s) == "" {
-							return errors.New("required")
-						}
-						return nil
-					}),
-				huh.NewInput().
-					Title(fmt.Sprintf("[Org %d] Certificate Authority (CA) Name:", idx+1)).
-					Value(&cfg.Orgs[idx].CAName).
-					Validate(func(s string) error {
-						if strings.TrimSpace(s) == "" {
-							return errors.New("required")
-						}
-						return nil
-					}),
-				huh.NewInput().
-					Title(fmt.Sprintf("[Org %d] Number of orderer nodes:", idx+1)).
-					Value(&ordererNodeCounts[idx]).
+					Title("How many application channels do you need at launch?").
+					Value(&channelCountStr).
 					Validate(func(s string) error {
 						v, err := strconv.Atoi(s)
-						if err != nil || v < 0 {
-							return errors.New("must be 0 or positive number")
+						if err != nil || v <= 0 {
+							return errors.New("must be a positive number")
 						}
 						return nil
 					}),
-				huh.NewInput().
-					Title(fmt.Sprintf("[Org %d] Number of peers:", idx+1)).
-					Value(&peerNodeCounts[idx]).
-					Validate(func(s string) error {
-						v, err := strconv.Atoi(s)
-						if err != nil || v < 0 {
-							return errors.New("must be 0 or positive number")
-						}
-						return nil
-					}),
-			).WithHideFunc(func() bool {
-				count, _ := strconv.Atoi(orgCountStr)
-				return idx >= count
-			}))
-		}
+			),
+		).Run()
 
-		// 3. Channel Configuration at the end
-		groups = append(groups, huh.NewGroup(
-			huh.NewInput().
-				Title("How many application channels do you need at launch?").
-				Value(&channelCountStr).
-				Validate(func(s string) error {
-					v, err := strconv.Atoi(s)
-					if err != nil || v <= 0 {
-						return errors.New("must be a positive number")
-					}
-					return nil
-				}),
-		))
-
-		err := huh.NewForm(groups...).Run()
 		if err != nil {
 			return nil, err
 		}
 
-		// Post-process counts
+		// 2. Allocate Organizations
 		orgCount, _ := strconv.Atoi(orgCountStr)
-		totalOrderers := 0
-
-		for i := 0; i < orgCount; i++ {
-			oCount, _ := strconv.Atoi(ordererNodeCounts[i])
-			totalOrderers += oCount
+		if len(cfg.Orgs) != orgCount {
+			newOrgs := make([]config.OrgConfig, orgCount)
+			for i := 0; i < orgCount; i++ {
+				if i < len(cfg.Orgs) {
+					newOrgs[i] = cfg.Orgs[i]
+				} else {
+					// Initialize new org with defaults
+					newOrgs[i] = config.OrgConfig{
+						Name:          fmt.Sprintf("Org%d", i+1),
+						MSPID:         fmt.Sprintf("Org%dMSP", i+1),
+						Domain:        fmt.Sprintf("org%d.example.com", i+1),
+						CAName:        fmt.Sprintf("ca-org%d", i+1),
+						OrdererCount:  1,
+						PeerCount:     2,
+						StateDatabase: "LevelDB",
+					}
+				}
+			}
+			cfg.Orgs = newOrgs
 		}
 
-		// Validation logic
+		// 3. Organization Specific Details
+		for i := 0; i < orgCount; i++ {
+			ordererCountStr := strconv.Itoa(cfg.Orgs[i].OrdererCount)
+			peerCountStr := strconv.Itoa(cfg.Orgs[i].PeerCount)
+
+			err := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title(fmt.Sprintf("[Org %d] Organization Name:", i+1)).
+						Value(&cfg.Orgs[i].Name),
+					huh.NewInput().
+						Title(fmt.Sprintf("[Org %d] MSP ID:", i+1)).
+						Value(&cfg.Orgs[i].MSPID),
+					huh.NewInput().
+						Title(fmt.Sprintf("[Org %d] Base Domain:", i+1)).
+						Value(&cfg.Orgs[i].Domain),
+					huh.NewInput().
+						Title(fmt.Sprintf("[Org %d] Certificate Authority (CA) Name:", i+1)).
+						Value(&cfg.Orgs[i].CAName),
+					huh.NewInput().
+						Title(fmt.Sprintf("[Org %d] Number of orderer nodes:", i+1)).
+						Value(&ordererCountStr),
+					huh.NewInput().
+						Title(fmt.Sprintf("[Org %d] Number of peers:", i+1)).
+						Value(&peerCountStr),
+				),
+			).Run()
+
+			if err != nil {
+				return nil, err
+			}
+
+			cfg.Orgs[i].OrdererCount, _ = strconv.Atoi(ordererCountStr)
+			cfg.Orgs[i].PeerCount, _ = strconv.Atoi(peerCountStr)
+
+			// Initialize the Peers slice to match the declared peer count
+			if len(cfg.Orgs[i].Peers) != cfg.Orgs[i].PeerCount {
+				newPeers := make([]config.PeerConfig, cfg.Orgs[i].PeerCount)
+				for p := 0; p < cfg.Orgs[i].PeerCount && p < len(cfg.Orgs[i].Peers); p++ {
+					newPeers[p] = cfg.Orgs[i].Peers[p]
+				}
+				cfg.Orgs[i].Peers = newPeers
+			}
+
+			// Ask state database preference per peer
+			for p := 0; p < cfg.Orgs[i].PeerCount; p++ {
+				if cfg.Orgs[i].Peers[p].StateDatabase == "" {
+					cfg.Orgs[i].Peers[p].StateDatabase = "leveldb"
+				}
+				peerDB := cfg.Orgs[i].Peers[p].StateDatabase
+				err := huh.NewForm(
+					huh.NewGroup(
+						huh.NewSelect[string]().
+							Title(fmt.Sprintf("[Org %d / Peer %d] State database:", i+1, p)).
+							Options(
+								huh.NewOption("LevelDB (Default, embedded)", "leveldb"),
+								huh.NewOption("CouchDB (Rich JSON queries)", "couchdb"),
+							).
+							Value(&peerDB),
+					),
+				).Run()
+				if err != nil {
+					return nil, err
+				}
+				cfg.Orgs[i].Peers[p].StateDatabase = peerDB
+			}
+		} // end org loop
+
+		// 4. Network-wide Validation
+		totalOrderers := 0
+		for _, org := range cfg.Orgs {
+			totalOrderers += org.OrdererCount
+		}
+
 		isValid := true
 		var errMsg string
 
-		if cfg.OrdererType == "CFT" {
+		switch cfg.OrdererType {
+		case "etcdraft":
 			if totalOrderers < 1 {
 				isValid = false
-				errMsg = "Raft (CFT) requires at least 1 orderer node across the network."
+				errMsg = "Raft (etcdraft) requires at least 1 orderer node."
 			}
-		} else if cfg.OrdererType == "BFT" {
-			// SmartBFT requires 3f+1, meaning total-1 is divisible by 3, and minimum 4
+		case "BFT":
 			if totalOrderers < 4 || (totalOrderers-1)%3 != 0 {
 				isValid = false
-				errMsg = fmt.Sprintf("SmartBFT requires 3f+1 nodes (e.g. 4, 7, 10). You specified %d.", totalOrderers)
+				errMsg = fmt.Sprintf("SmartBFT requires 3f+1 nodes (4, 7, 10...). You have %d.", totalOrderers)
 			}
 		}
 
@@ -282,22 +285,12 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 		}
 
 		fmt.Println("\n[!] VALIDATION ERROR:", errMsg)
-		fmt.Println("Please adjust your orderer node counts.")
-		fmt.Println("Press Enter to return to the wizard and fix your configuration...")
+		fmt.Println("Press Enter to fix your configuration...")
 		var dummy string
 		fmt.Scanln(&dummy)
 	}
 
-	// Finalize struct
-	orgCount, _ := strconv.Atoi(orgCountStr)
 	cfg.ChannelCount, _ = strconv.Atoi(channelCountStr)
-	cfg.Orgs = cfg.Orgs[:orgCount]
-
-	for i := 0; i < orgCount; i++ {
-		cfg.Orgs[i].OrdererCount, _ = strconv.Atoi(ordererNodeCounts[i])
-		cfg.Orgs[i].PeerCount, _ = strconv.Atoi(peerNodeCounts[i])
-	}
-
 	return cfg, nil
 }
 
@@ -306,9 +299,16 @@ func PrintSummary(cfg *config.NetworkConfig) {
 	fmt.Println("\n=== Network Configuration Summary ===")
 	fmt.Printf("Network Name:    %s\n", cfg.NetworkName)
 	fmt.Printf("Fabric Version:  %s\n", cfg.FabricVersion)
+	fmt.Printf("CA Version:      %s\n", cfg.CAVersion)
+	fmt.Printf("CouchDB Version: %s\n", cfg.CouchDBVersion)
 	fmt.Printf("Consensus:       %s\n", cfg.OrdererType)
 	fmt.Printf("Crypto Strategy: %s\n", cfg.CryptoStrategy)
-	fmt.Printf("State Database:  %s\n", cfg.StateDatabase)
+	if cfg.CryptoStrategy == "Fabric CA" {
+		fmt.Printf("  CA Database:   %s\n", cfg.CADatabaseType)
+		if cfg.CADatabaseType == "postgres" {
+			fmt.Printf("  Postgres Ver:  %s\n", cfg.PostgresVersion)
+		}
+	}
 	fmt.Printf("Deploy Target:   %s\n", cfg.DeploymentTarget)
 	fmt.Printf("Chaincode Mode:  %s\n", cfg.ChaincodeMode)
 	fmt.Printf("Channels:        %d\n", cfg.ChannelCount)
@@ -332,10 +332,6 @@ func PrintSummary(cfg *config.NetworkConfig) {
 	hasWarnings := false
 	warnings := "\n[!] ATTENTION: The following selections are captured but not yet fully implemented in our physical generators:\n"
 
-	if cfg.StateDatabase == "CouchDB" {
-		hasWarnings = true
-		warnings += "    - CouchDB container orchestration and configuration\n"
-	}
 	if cfg.DeploymentTarget == "Kubernetes" {
 		hasWarnings = true
 		warnings += "    - Kubernetes manifests (falling back to Docker Compose conceptually)\n"

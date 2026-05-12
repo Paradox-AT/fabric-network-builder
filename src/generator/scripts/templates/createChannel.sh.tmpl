@@ -2,6 +2,7 @@
 
 ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
 . ${ROOTDIR}/scripts/envVar.sh
+. ${ROOTDIR}/network.config
 
 CHANNEL_NAME="$1"
 DELAY="$2"
@@ -9,14 +10,14 @@ MAX_RETRY="$3"
 VERBOSE="$4"
 BFT="$5"
 
-: ${CHANNEL_NAME:="mychannel"}
-: ${DELAY:="3"}
-: ${MAX_RETRY:="5"}
-: ${VERBOSE:="false"}
-: ${BFT:=0}
+: "${CHANNEL_NAME:="mychannel"}"
+: "${DELAY:="${CLI_DELAY:-3}"}"
+: "${MAX_RETRY:="${MAX_RETRY:-5}"}"
+: "${VERBOSE:="false"}"
+: "${BFT:=0}"
 
-if [ ! -d "channel-artifacts" ]; then
-	mkdir channel-artifacts
+if [ ! -d "${ROOTDIR}/channel-artifacts" ]; then
+	mkdir ${ROOTDIR}/channel-artifacts
 fi
 
 createChannelGenesisBlock() {
@@ -25,7 +26,7 @@ createChannelGenesisBlock() {
 		fatalln "configtxgen tool not found."
 	fi
 	set -x
-	configtxgen -profile ApplicationChannel -outputBlock ./channel-artifacts/${CHANNEL_NAME}.block -channelID $CHANNEL_NAME
+	FABRIC_CFG_PATH=${ROOTDIR}/configtx configtxgen -profile ApplicationChannel -outputBlock ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block -channelID $CHANNEL_NAME
 	res=$?
 	{ set +x; } 2>/dev/null
   verifyResult $res "Failed to generate channel configuration transaction..."
@@ -38,18 +39,21 @@ createChannel() {
 	infoln "Joining orderers to the channel"
 	
 	# We use osnadmin for modern channel creation/joining
-{{- range .Orgs }}
+{{- range $orgIndex, $org := .Orgs }}
   {{- if gt .OrdererCount 0 }}
     {{- $orgDomain := .Domain }}
     {{- $orgName := .Name }}
     {{- range $i, $e := until .OrdererCount }}
-	while [ $rc -ne 0 -a $COUNTER -lt $MAX_RETRY ] ; do
+	rc=1
+	COUNTER=1
+	infoln "Joining orderer{{$i}}.{{ $orgDomain }} to the channel..."
+	while [ $rc -ne 0 ] && [ $COUNTER -lt $MAX_RETRY ] ; do
 		sleep $DELAY
 		set -x
-		osnadmin channel join --channelID ${CHANNEL_NAME} --config-block ./channel-artifacts/${CHANNEL_NAME}.block -o localhost:{{ add 7053 (multiply $i 1000) }} --ca-file "$ORDERER_CA" --client-cert "${PWD}/organizations/{{ toLower $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt" --client-key "${PWD}/organizations/{{ toLower $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.key" >&log.txt
+		FABRIC_CFG_PATH=${ROOTDIR}/configtx osnadmin channel join --channelID ${CHANNEL_NAME} --config-block ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block -o localhost:{{ calculateOrdererPort $orgIndex $i 7053 }} --ca-file "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/tlsca/tlsca.{{ $orgDomain }}-cert.pem" --client-cert "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt" --client-key "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.key" >&log.txt
 		res=$?
 		{ set +x; } 2>/dev/null
-		let rc=$res
+		rc=$res
 		COUNTER=$(expr $COUNTER + 1)
 	done
     {{- end }}
@@ -59,28 +63,28 @@ createChannel() {
 	verifyResult $res "Channel creation failed"
 }
 
-# joinChannel ORG
+# joinChannel ORG PEER
 joinChannel() {
   ORG=$1
-  setGlobals $ORG
+  PEER=$2
+  setGlobals $ORG $PEER
 	local rc=1
 	local COUNTER=1
 	## Sometimes Join takes time, hence retry
-	while [ $rc -ne 0 -a $COUNTER -lt $MAX_RETRY ] ; do
+	while [ $rc -ne 0 ] && [ $COUNTER -lt $MAX_RETRY ] ; do
     sleep $DELAY
     set -x
-    peer channel join -b ./channel-artifacts/${CHANNEL_NAME}.block >&log.txt
+    FABRIC_CFG_PATH=${ROOTDIR}/config peer channel join -b ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block >&log.txt
     res=$?
     { set +x; } 2>/dev/null
-		let rc=$res
+		rc=$res
 		COUNTER=$(expr $COUNTER + 1)
 	done
 	cat log.txt
-	verifyResult $res "After $MAX_RETRY attempts, peer of Org${ORG} has failed to join channel '$CHANNEL_NAME' "
+	verifyResult $res "After $MAX_RETRY attempts, peer${PEER} of Org${ORG} has failed to join channel '$CHANNEL_NAME' "
 }
 
 ## Create channel genesis block
-export FABRIC_CFG_PATH=${PWD}/configtx
 infoln "Generating channel genesis block '${CHANNEL_NAME}.block'"
 createChannelGenesisBlock
 
@@ -91,9 +95,9 @@ successln "Channel '$CHANNEL_NAME' created"
 
 ## Join all the peers to the channel
 {{- range $i, $org := .Orgs }}
-  {{- if gt .PeerCount 0 }}
-infoln "Joining Org{{ inc $i }} peer to the channel..."
-joinChannel {{ inc $i }}
+  {{- range $j, $p := until .PeerCount }}
+infoln "Joining Org{{ inc $i }} peer{{ $j }} to the channel..."
+joinChannel {{ inc $i }} {{ $j }}
   {{- end }}
 {{- end }}
 

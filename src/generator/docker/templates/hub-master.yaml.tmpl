@@ -1,3 +1,6 @@
 include:
   - path: compose-peers.yaml
   - path: compose-orderers.yaml
+  {{- if eq .CryptoStrategy "Fabric CA" }}
+  - path: compose-cas.yaml
+  {{- end }}

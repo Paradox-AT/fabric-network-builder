@@ -42,7 +42,8 @@ func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string)
 
 	// 2. Generate scripts that go into network/ root
 	rootFiles := map[string]string{
-		"network.sh.tmpl": "network.sh",
+		"network.sh.tmpl":     "network.sh",
+		"network.config.tmpl": "network.config",
 	}
 
 	for tmplName, fileName := range rootFiles {
@@ -73,6 +74,18 @@ func (g *ScriptsGenerator) generateFile(cfg *config.NetworkConfig, tmplName, des
 		},
 		"multiply": func(a, b int) int {
 			return a * b
+		},
+		"calculatePeerPort": func(orgIndex, peerIndex, offset int) int {
+			return ((orgIndex + 1) * 10000) + 4000 + (peerIndex * 100) + (offset % 100)
+		},
+		"calculateOrdererPort": func(orgIndex, ordererIndex, offset int) int {
+			return ((orgIndex + 1) * 10000) + 3000 + (ordererIndex * 100) + (offset % 100)
+		},
+		"calculateCAPort": func(orgIndex, offset int) int {
+			return ((orgIndex + 1) * 10000) + 2000 + (offset % 100)
+		},
+		"calculateDatabasePort": func(orgIndex, offset int) int {
+			return ((orgIndex + 1) * 10000) + 1000 + (offset % 100)
 		},
 	}
 

@@ -6,7 +6,11 @@ ROOTDIR=$(cd "$(dirname "$0")" && pwd)
 export PATH=${ROOTDIR}/./bin:${PWD}/./bin:$PATH
 export VERBOSE=false
 
+. ${ROOTDIR}/network.config
 . ${ROOTDIR}/scripts/utils.sh
+
+COMPOSE_FILE_BASE=${ROOTDIR}/compose/docker-compose.yaml
+COMPOSE_FILE_CA=${ROOTDIR}/compose/compose-cas.yaml
 
 # Obtain CONTAINER_IDS and remove them
 function clearContainers() {
@@ -19,15 +23,47 @@ function bootstrap() {
   ${ROOTDIR}/scripts/bootstrap.sh
 }
 
+# Check if required binaries and config files exist, auto-bootstrap if missing
+function checkBinaries() {
+  local missing=false
+  local BINS="peer orderer configtxgen cryptogen"
+  if [ "${CRYPTO}" == "Fabric CA" ]; then
+    BINS="${BINS} fabric-ca-client"
+  fi
+
+  for bin in ${BINS}; do
+    if [ ! -f "${ROOTDIR}/bin/${bin}" ]; then
+      warnln "Binary '${bin}' not found in ${ROOTDIR}/bin/"
+      missing=true
+    fi
+  done
+
+  # core.yaml is required by the peer binary (extracted from the Fabric tarball by bootstrap)
+  if [ ! -f "${ROOTDIR}/config/core.yaml" ]; then
+    warnln "config/core.yaml not found — Fabric config files are missing"
+    missing=true
+  fi
+
+  if [ "$missing" = true ]; then
+    infoln "One or more binaries or config files are missing. Running bootstrap..."
+    bootstrap
+  else
+    infoln "All required binaries and config files found."
+  fi
+}
+
 function networkUp() {
-  # Generate artifacts if they don't exist (checking a specific org's identities)
+  # 1. Pre-flight check: ensure binaries are present
+  checkBinaries
+
+  # 2. Generate crypto material if identities don't exist yet
   {{- range $i, $org := .Orgs }}{{ if eq $i 0 }}
   if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities" ]; then
     generateCerts
   fi
   {{ end }}{{ end }}
 
-  docker-compose -f ${ROOTDIR}/compose/docker-compose.yaml up -d 2>&1
+  docker-compose -f ${COMPOSE_FILE_BASE} up -d 2>&1
 
   docker ps -a
   if [ $? -ne 0 ]; then
@@ -36,39 +72,106 @@ function networkUp() {
 }
 
 function generateCerts() {
-  which cryptogen
-  if [ "$?" -ne 0 ]; then
-    fatalln "cryptogen tool not found. Run './network/network.sh bootstrap' first."
+  if [ "${CRYPTO}" == "Fabric CA" ]; then
+    infoln "Generating certificates using Fabric CA"
+
+    docker-compose -f ${COMPOSE_FILE_CA} up -d 2>&1
+
+    {{- range $i, $org := .Orgs }}
+    infoln "Waiting for {{ .Name }} CA to be ready..."
+    
+    # Pre-create directory for the certificate
+    mkdir -p "${ROOTDIR}/organizations/{{ toLower .Name }}/ca"
+    
+    # Fetch the CA cert from the container. It might take a second to generate at first boot.
+    COUNTER=0
+    while [ $COUNTER -lt 10 ]; do
+      docker cp ca.{{ .Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" 2>/dev/null && break
+      sleep 1
+      COUNTER=$((COUNTER + 1))
+    done
+
+    # Wait for CA to accept requests (Application Layer Check)
+    export FABRIC_CA_CLIENT_HOME="${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}"
+    mkdir -p "${FABRIC_CA_CLIENT_HOME}"
+    COUNTER=0
+    rc=1
+    while [[ $rc -ne 0 && $COUNTER -lt 20 ]]; do
+      sleep 1
+      fabric-ca-client getcainfo -u https://admin:adminpw@localhost:{{ calculateCAPort $i 7054 }} --caname {{ .CAName }} --tls.certfiles "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" >/dev/null 2>&1
+      rc=$?
+      COUNTER=$((COUNTER + 1))
+    done
+
+    # Now that CA is ready, run the full enrollment script
+    . ${ROOTDIR}/organizations/{{ toLower .Name }}/scripts/registerEnroll.sh
+    {{- end }}
+  else
+    which cryptogen
+    if [ "$?" -ne 0 ]; then
+      fatalln "cryptogen tool not found. Run './network/network.sh bootstrap' first."
+    fi
+
+    infoln "Generating certificates using cryptogen tool"
+
+    {{- range .Orgs }}
+    infoln "Creating {{ .Name }} Identities"
+    set -x
+    cryptogen generate --config=${ROOTDIR}/organizations/{{ toLower .Name }}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/{{ toLower .Name }}/identities"
+    res=$?
+    { set +x; } 2>/dev/null
+    verifyResult $res "Failed to generate certificates for {{ .Name }}..."
+    {{- end }}
   fi
-
-  infoln "Generating certificates using cryptogen tool"
-
-{{- range .Orgs }}
-  infoln "Creating {{ .Name }} Identities"
-  set -x
-  cryptogen generate --config=${ROOTDIR}/organizations/{{ toLower .Name }}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/{{ toLower .Name }}/identities"
-  res=$?
-  { set +x; } 2>/dev/null
-  verifyResult $res "Failed to generate certificates for {{ .Name }}..."
-{{- end }}
 }
 
 function createChannel() {
-  if [ ! -d "${ROOTDIR}/organizations" ]; then
+  # Pre-flight 1: ensure all binaries are present
+  checkBinaries
+
+  # 1. Check if the network is running
+  running=$(docker-compose -f ${COMPOSE_FILE_BASE} ps --status running -q 2>/dev/null)
+  if [ -z "$running" ]; then
+    infoln "Network is not running. Starting network..."
     networkUp
+  else
+    infoln "Network is already up."
   fi
-  ${ROOTDIR}/scripts/createChannel.sh $CHANNEL_NAME 3 5 false 0
+  infoln "Proceeding to create channel '${CHANNEL_NAME}'..."
+  ${ROOTDIR}/scripts/createChannel.sh "$CHANNEL_NAME" 3 5 false 0
 }
 
 function networkDown() {
-  docker-compose -f ${ROOTDIR}/compose/docker-compose.yaml down --volumes --remove-orphans
+  infoln "Stopping network"
+  docker-compose -f ${COMPOSE_FILE_BASE} down --volumes --remove-orphans
+  if [ "${CRYPTO}" == "Fabric CA" ]; then
+    docker-compose -f ${COMPOSE_FILE_CA} down --volumes --remove-orphans
+  fi
 
   if [ "$MODE" != "restart" ]; then
     # Bring down the network, deleting the volumes
     clearContainers
-    # remove only the generated identities and channel artifacts
+
     infoln "Removing generated identities and artifacts"
-    rm -rf ${ROOTDIR}/organizations/*/identities ${ROOTDIR}/channel-artifacts ${ROOTDIR}/log.txt
+
+    # Remove channel artifacts and logs
+    rm -rf ${ROOTDIR}/channel-artifacts/*.block ${ROOTDIR}/log.txt
+
+    # Remove organization identities and CA runtime data
+    # We use a container to clean up to avoid permission issues with files created by Docker
+    docker run --rm -v ${ROOTDIR}:/data busybox sh -c "
+      cd /data && \
+      {{- range .Orgs }}
+      rm -rf organizations/{{ toLower .Name }}/identities && \
+      rm -rf organizations/{{ toLower .Name }}/ca/msp \
+             organizations/{{ toLower .Name }}/ca/tls-cert.pem \
+             organizations/{{ toLower .Name }}/ca/ca-cert.pem \
+             organizations/{{ toLower .Name }}/ca/IssuerPublicKey \
+             organizations/{{ toLower .Name }}/ca/IssuerRevocationPublicKey \
+             organizations/{{ toLower .Name }}/ca/fabric-ca-server.db && \
+      {{- end }}
+      true
+    "
   fi
 }
 

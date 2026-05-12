@@ -24,9 +24,14 @@ func NewDockerComposeGenerator() *DockerComposeGenerator {
 }
 
 type OrgComposeData struct {
-	Org           config.OrgConfig
-	OrgIndex      int
-	FabricVersion string
+	Org               config.OrgConfig
+	OrgIndex          int
+	FabricVersion     string
+	CAVersion         string
+	CADatabaseType    string
+	PostgresVersion   string
+	CouchDBVersion    string
+	PeerStateDatabase func(int) string // returns "leveldb" or "couchdb" for a given peer index
 }
 
 // Generate implements the Generator interface
@@ -40,12 +45,26 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 			return r
 		},
 		"calculatePeerPort": func(orgIndex, peerIndex, offset int) int {
-			return 10000 + (orgIndex * 1000) + (peerIndex * 100) + offset
+			return ((orgIndex + 1) * 10000) + 4000 + (peerIndex * 100) + (offset % 100)
 		},
 		"calculateOrdererPort": func(orgIndex, ordererIndex, offset int) int {
-			return 20000 + (orgIndex * 1000) + (ordererIndex * 100) + offset
+			return ((orgIndex + 1) * 10000) + 3000 + (ordererIndex * 100) + (offset % 100)
+		},
+		"calculateCAPort": func(orgIndex, offset int) int {
+			return ((orgIndex + 1) * 10000) + 2000 + (offset % 100)
+		},
+		"calculateDatabasePort": func(orgIndex, offset int) int {
+			return ((orgIndex + 1) * 10000) + 1000 + (offset % 100)
 		},
 		"toLower": strings.ToLower,
+		"orgHasCouchDB": func(org config.OrgConfig) bool {
+			for p := 0; p < org.PeerCount; p++ {
+				if org.PeerStateDatabase(p) == "couchdb" {
+					return true
+				}
+			}
+			return false
+		},
 	}
 
 	// 1. Parse all templates
@@ -69,6 +88,18 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 	if err != nil {
 		return fmt.Errorf("failed to parse hub-master template: %w", err)
 	}
+	couchTmpl, err := template.New("couch-compose.yaml.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/couch-compose.yaml.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse couch template: %w", err)
+	}
+	caComposeTmpl, err := template.New("ca-compose.yaml.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/ca-compose.yaml.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse ca-compose template: %w", err)
+	}
+	hubCAsTmpl, err := template.New("hub-cas.yaml.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/hub-cas.yaml.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse hub-cas template: %w", err)
+	}
 
 	// 2. Generate Organizational Compose Files
 	for i, org := range cfg.Orgs {
@@ -78,10 +109,18 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 			return fmt.Errorf("failed to create compose directory for org %s: %w", org.Name, err)
 		}
 
+		orgCopy := org // capture for closure
 		data := OrgComposeData{
-			Org:           org,
-			OrgIndex:      i,
-			FabricVersion: cfg.FabricVersion,
+			Org:             org,
+			OrgIndex:        i,
+			FabricVersion:   cfg.FabricVersion,
+			CAVersion:       cfg.CAVersion,
+			CADatabaseType:  cfg.CADatabaseType,
+			PostgresVersion: cfg.PostgresVersion,
+			CouchDBVersion:  cfg.CouchDBVersion,
+			PeerStateDatabase: func(peerIndex int) string {
+				return orgCopy.PeerStateDatabase(peerIndex)
+			},
 		}
 
 		if org.PeerCount > 0 {
@@ -96,6 +135,28 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
 			}
 			fmt.Printf("Generated %s\n", filePath)
+
+			// Generate couch overlay if any peer in this org uses CouchDB
+			hasCouchDB := false
+			for p := 0; p < org.PeerCount; p++ {
+				if org.PeerStateDatabase(p) == "couchdb" {
+					hasCouchDB = true
+					break
+				}
+			}
+			if hasCouchDB {
+				var couchBuf bytes.Buffer
+				err = couchTmpl.Execute(&couchBuf, data)
+				if err != nil {
+					return fmt.Errorf("failed to execute couch template for %s: %w", org.Name, err)
+				}
+				couchFilePath := filepath.Join(orgComposeDir, "compose-couch.yaml")
+				err = os.WriteFile(couchFilePath, couchBuf.Bytes(), 0644)
+				if err != nil {
+					return fmt.Errorf("failed to write %s: %w", couchFilePath, err)
+				}
+				fmt.Printf("Generated %s\n", couchFilePath)
+			}
 		}
 
 		if org.OrdererCount > 0 {
@@ -105,6 +166,21 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 				return fmt.Errorf("failed to execute orderer template for %s: %w", org.Name, err)
 			}
 			filePath := filepath.Join(orgComposeDir, "compose-orderer.yaml")
+			err = os.WriteFile(filePath, buf.Bytes(), 0644)
+			if err != nil {
+				return fmt.Errorf("failed to write %s: %w", filePath, err)
+			}
+			fmt.Printf("Generated %s\n", filePath)
+		}
+
+		// Generate CA compose if using Fabric CA
+		if cfg.CryptoStrategy == "Fabric CA" {
+			var buf bytes.Buffer
+			err = caComposeTmpl.Execute(&buf, data)
+			if err != nil {
+				return fmt.Errorf("failed to execute CA compose template for %s: %w", org.Name, err)
+			}
+			filePath := filepath.Join(orgComposeDir, "compose-ca.yaml")
 			err = os.WriteFile(filePath, buf.Bytes(), 0644)
 			if err != nil {
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
@@ -155,6 +231,20 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 		return fmt.Errorf("failed to write compose/docker-compose.yaml: %w", err)
 	}
 	fmt.Printf("Generated %s\n", filepath.Join(hubDir, "docker-compose.yaml"))
+
+	// Generate compose/compose-cas.yaml if using Fabric CA
+	if cfg.CryptoStrategy == "Fabric CA" {
+		var casBuf bytes.Buffer
+		err = hubCAsTmpl.Execute(&casBuf, cfg)
+		if err != nil {
+			return fmt.Errorf("failed to execute hub-cas template: %w", err)
+		}
+		err = os.WriteFile(filepath.Join(hubDir, "compose-cas.yaml"), casBuf.Bytes(), 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write compose/compose-cas.yaml: %w", err)
+		}
+		fmt.Printf("Generated %s\n", filepath.Join(hubDir, "compose-cas.yaml"))
+	}
 
 	return nil
 }

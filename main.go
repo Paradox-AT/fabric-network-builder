@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/charmbracelet/huh"
 	"network-builder/src/cli"
 	"network-builder/src/config"
 	"network-builder/src/generator"
@@ -15,6 +14,8 @@ import (
 	"network-builder/src/generator/crypto"
 	"network-builder/src/generator/docker"
 	"network-builder/src/generator/scripts"
+
+	"github.com/charmbracelet/huh"
 )
 
 func main() {
@@ -22,8 +23,8 @@ func main() {
 	fmt.Println("This wizard will help you configure your enterprise blockchain network.")
 	fmt.Println("Use Tab/Shift+Tab to navigate back and forth between pages.")
 
-	configPath := "network-config.json"
 	outputDir := "./network"
+	configPath := filepath.Join(outputDir, "network-config.json")
 
 	// Load existing configuration if available
 	loadedCfg, err := config.LoadConfig(configPath)
@@ -84,6 +85,7 @@ func main() {
 
 	generators := []generator.Generator{
 		crypto.NewCryptogenGenerator(),
+		crypto.NewFabricCAGenerator(),
 		configtx.NewConfigtxGenerator(),
 		docker.NewDockerComposeGenerator(),
 		scripts.NewScriptsGenerator(),
@@ -91,14 +93,7 @@ func main() {
 
 	fmt.Println("\n=== Generating Network Artifacts ===")
 
-	// Clean up old artifacts to prevent stale files from previous runs
-	subDirs := []string{"organizations", "configtx", "scripts", "compose"}
-	for _, d := range subDirs {
-		os.RemoveAll(filepath.Join(outputDir, d))
-	}
-	// Also remove top-level scripts if they exist (legacy paths)
-	os.Remove(filepath.Join(outputDir, "network.sh"))
-	os.Remove(filepath.Join(outputDir, "bootstrap.sh"))
+	cleanArtifacts(outputDir)
 
 	for _, gen := range generators {
 		err := gen.Generate(cfg, outputDir)
@@ -113,4 +108,31 @@ func main() {
 	}
 
 	fmt.Printf("\nGeneration complete. Artifacts are located in: %s\n", outputDir)
+}
+
+// cleanArtifacts removes all previously generated files to prevent stale
+// artifacts from interfering with the new generation run.
+func cleanArtifacts(outputDir string) {
+	fmt.Println("Cleaning up old artifacts...")
+
+	// Generated subdirectories
+	subDirs := []string{"organizations", "configtx", "scripts", "compose"}
+	for _, d := range subDirs {
+		target := filepath.Join(outputDir, d)
+		if err := os.RemoveAll(target); err == nil {
+			fmt.Printf("  removed: %s/\n", d)
+		}
+	}
+
+	// Generated top-level files
+	files := []string{"network.sh", "network.config"}
+	for _, f := range files {
+		target := filepath.Join(outputDir, f)
+		if _, err := os.Stat(target); err == nil {
+			os.Remove(target)
+			fmt.Printf("  removed: %s\n", f)
+		}
+	}
+
+	fmt.Println("Cleanup complete.")
 }

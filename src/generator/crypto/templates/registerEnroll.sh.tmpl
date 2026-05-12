@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+
+# This script is generated for organization: {{ .Org.Name }}
+
+function createOrg{{ add .OrgIndex 1 }}() {
+  infoln "Enrolling the CA admin for {{ .Org.Name }}"
+  
+  # Fetch CA certificate from container since it's now in a Docker volume
+  LOCAL_CA_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/ca"
+  mkdir -p "${LOCAL_CA_DIR}"
+  infoln "Fetching CA certificate from container ca.{{ .Org.Domain }}..."
+  docker cp ca.{{ .Org.Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${LOCAL_CA_DIR}/ca-cert.pem"
+  
+  # For peers
+  {{ if gt .Org.PeerCount 0 }}
+  ORG_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/identities/peerOrganizations/{{ .Org.Domain }}"
+  mkdir -p "${ORG_DIR}"
+  export FABRIC_CA_CLIENT_HOME="${ORG_DIR}"
+
+  set -x
+  fabric-ca-client enroll -u https://admin:adminpw@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  echo 'NodeOUs:
+  Enable: true
+  ClientOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: client
+  PeerOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: peer
+  AdminOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: admin
+  OrdererOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: orderer' > "${ORG_DIR}/msp/config.yaml"
+
+  # Copy CA certs
+  mkdir -p "${ORG_DIR}/msp/tlscacerts"
+  cp "${LOCAL_CA_DIR}/ca-cert.pem" "${ORG_DIR}/msp/tlscacerts/ca.crt"
+  mkdir -p "${ORG_DIR}/tlsca"
+  cp "${LOCAL_CA_DIR}/ca-cert.pem" "${ORG_DIR}/tlsca/tlsca.{{ .Org.Domain }}-cert.pem"
+  mkdir -p "${ORG_DIR}/ca"
+  cp "${LOCAL_CA_DIR}/ca-cert.pem" "${ORG_DIR}/ca/ca.{{ .Org.Domain }}-cert.pem"
+
+  {{ range $j, $peer := until .Org.PeerCount }}
+  infoln "Registering peer{{ $j }} for {{ $.Org.Name }}"
+  set -x
+  fabric-ca-client register --caname {{ $.Org.CAName }} --id.name peer{{ $j }} --id.secret peer{{ $j }}pw --id.type peer --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
+  { set +x; } 2>/dev/null
+  {{ end }}
+
+  infoln "Registering user for {{ .Org.Name }}"
+  set -x
+  fabric-ca-client register --caname {{ .Org.CAName }} --id.name user1 --id.secret user1pw --id.type client --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  infoln "Registering the org admin for {{ .Org.Name }}"
+  set -x
+  fabric-ca-client register --caname {{ .Org.CAName }} --id.name {{ toLower .Org.Name }}admin --id.secret {{ toLower .Org.Name }}adminpw --id.type admin --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  {{ range $j, $peer := until .Org.PeerCount }}
+  infoln "Generating the peer{{ $j }} msp for {{ $.Org.Name }}"
+  PEER_DIR="${ORG_DIR}/peers/peer{{ $j }}.{{ $.Org.Domain }}"
+  mkdir -p "${PEER_DIR}"
+  set -x
+  fabric-ca-client enroll -u https://peer{{ $j }}:peer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${PEER_DIR}/msp" --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  cp "${ORG_DIR}/msp/config.yaml" "${PEER_DIR}/msp/config.yaml"
+
+  infoln "Generating the peer{{ $j }}-tls certificates for {{ $.Org.Name }}"
+  set -x
+  fabric-ca-client enroll -u https://peer{{ $j }}:peer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${PEER_DIR}/tls" --enrollment.profile tls --csr.hosts peer{{ $j }}.{{ $.Org.Domain }} --csr.hosts localhost --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  # Copy the tls CA cert, server cert, server keystore to well known file names
+  cp "${PEER_DIR}/tls/tlscacerts/"* "${PEER_DIR}/tls/ca.crt"
+  cp "${PEER_DIR}/tls/signcerts/"* "${PEER_DIR}/tls/server.crt"
+  cp "${PEER_DIR}/tls/keystore/"* "${PEER_DIR}/tls/server.key"
+  {{ end }}
+
+  infoln "Generating the user msp for {{ .Org.Name }}"
+  set -x
+  fabric-ca-client enroll -u https://user1:user1pw@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} -M "${ORG_DIR}/users/User1@{{ .Org.Domain }}/msp" --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  cp "${ORG_DIR}/msp/config.yaml" "${ORG_DIR}/users/User1@{{ .Org.Domain }}/msp/config.yaml"
+
+  infoln "Generating the org admin msp for {{ .Org.Name }}"
+  set -x
+  fabric-ca-client enroll -u https://{{ toLower .Org.Name }}admin:{{ toLower .Org.Name }}adminpw@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} -M "${ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp" --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  cp "${ORG_DIR}/msp/config.yaml" "${ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp/config.yaml"
+  {{ end }}
+
+  # For orderers
+  {{ if gt .Org.OrdererCount 0 }}
+  ORDERER_ORG_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/identities/ordererOrganizations/{{ .Org.Domain }}"
+  mkdir -p "${ORDERER_ORG_DIR}"
+  export FABRIC_CA_CLIENT_HOME="${ORDERER_ORG_DIR}"
+
+  infoln "Enrolling the CA admin for {{ .Org.Name }} (Orderer)"
+  set -x
+  fabric-ca-client enroll -u https://admin:adminpw@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  echo 'NodeOUs:
+  Enable: true
+  ClientOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: client
+  PeerOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: peer
+  AdminOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: admin
+  OrdererOUIdentifier:
+    Certificate: cacerts/localhost-{{ calculateCAPort .OrgIndex 7054 }}-{{ .Org.CAName }}.pem
+    OrganizationalUnitIdentifier: orderer' > "${ORDERER_ORG_DIR}/msp/config.yaml"
+
+  # Copy CA certs
+  mkdir -p "${ORDERER_ORG_DIR}/msp/tlscacerts"
+  cp "${LOCAL_CA_DIR}/ca-cert.pem" "${ORDERER_ORG_DIR}/msp/tlscacerts/ca.crt"
+  mkdir -p "${ORDERER_ORG_DIR}/tlsca"
+  cp "${LOCAL_CA_DIR}/ca-cert.pem" "${ORDERER_ORG_DIR}/tlsca/tlsca.{{ .Org.Domain }}-cert.pem"
+
+  {{ range $j, $orderer := until .Org.OrdererCount }}
+  infoln "Registering orderer{{ $j }} for {{ $.Org.Name }}"
+  set -x
+  fabric-ca-client register --caname {{ $.Org.CAName }} --id.name orderer{{ $j }} --id.secret orderer{{ $j }}pw --id.type orderer --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  infoln "Generating the orderer{{ $j }} MSP for {{ $.Org.Name }}"
+  ORDERER_DIR="${ORDERER_ORG_DIR}/orderers/orderer{{ $j }}.{{ $.Org.Domain }}"
+  mkdir -p "${ORDERER_DIR}"
+  set -x
+  fabric-ca-client enroll -u https://orderer{{ $j }}:orderer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${ORDERER_DIR}/msp" --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  cp "${ORDERER_ORG_DIR}/msp/config.yaml" "${ORDERER_DIR}/msp/config.yaml"
+
+  infoln "Generating the orderer{{ $j }} TLS certificates for {{ $.Org.Name }}"
+  set -x
+  fabric-ca-client enroll -u https://orderer{{ $j }}:orderer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${ORDERER_DIR}/tls" --enrollment.profile tls --csr.hosts orderer{{ $j }}.{{ $.Org.Domain }} --csr.hosts localhost --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  # Copy the tls CA cert, server cert, server keystore to well known file names
+  cp "${ORDERER_DIR}/tls/tlscacerts/"* "${ORDERER_DIR}/tls/ca.crt"
+  cp "${ORDERER_DIR}/tls/signcerts/"* "${ORDERER_DIR}/tls/server.crt"
+  cp "${ORDERER_DIR}/tls/keystore/"* "${ORDERER_DIR}/tls/server.key"
+
+  # Copy orderer org's CA cert to orderer's /msp/tlscacerts directory
+  mkdir -p "${ORDERER_DIR}/msp/tlscacerts"
+  cp "${ORDERER_DIR}/tls/tlscacerts/"* "${ORDERER_DIR}/msp/tlscacerts/tlsca.{{ $.Org.Domain }}-cert.pem"
+  {{ end }}
+
+  infoln "Generating the orderer admin msp for {{ .Org.Name }}"
+  set -x
+  fabric-ca-client enroll -u https://{{ toLower .Org.Name }}admin:{{ toLower .Org.Name }}adminpw@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} -M "${ORDERER_ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp" --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
+  { set +x; } 2>/dev/null
+
+  cp "${ORDERER_ORG_DIR}/msp/config.yaml" "${ORDERER_ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp/config.yaml"
+  {{ end }}
+}
+
+createOrg{{ add .OrgIndex 1 }}

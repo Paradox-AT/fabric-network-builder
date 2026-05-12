@@ -1,0 +1,30 @@
+networks:
+  test:
+    name: fabric_test
+
+services:
+{{- range $i, $e := until .Org.PeerCount }}
+{{- if eq (call $.PeerStateDatabase $i) "couchdb" }}
+  couchdb{{$i}}.{{ $.Org.Domain }}:
+    container_name: couchdb{{$i}}.{{ $.Org.Domain }}
+    image: couchdb:{{ $.CouchDBVersion }}
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - {{ calculatePeerPort $.OrgIndex $i 5984 }}:5984
+    networks:
+      - test
+
+  peer{{$i}}.{{ $.Org.Domain }}:
+    environment:
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb{{$i}}.{{ $.Org.Domain }}:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+    depends_on:
+      - couchdb{{$i}}.{{ $.Org.Domain }}
+{{- end }}
+{{- end }}

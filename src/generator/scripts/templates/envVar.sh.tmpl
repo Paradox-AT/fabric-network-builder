@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-#
-# Copyright IBM Corp All Rights Reserved
-#
-# SPDX-License-Identifier: Apache-2.0
-#
 
 # This is a collection of bash functions used by different scripts
 
@@ -15,22 +10,39 @@ export CORE_PEER_TLS_ENABLED=true
 # Set environment variables for the peer org
 setGlobals() {
   local USING_ORG=""
+  local USING_PEER=""
   if [ -z "$OVERRIDE_ORG" ]; then
     USING_ORG=$1
   else
     USING_ORG="${OVERRIDE_ORG}"
   fi
-  infoln "Using organization ${USING_ORG}"
-
+  if [ -z "$2" ]; then
+    USING_PEER=0
+  else
+    USING_PEER=$2
+  fi
+  infoln "Using organization ${USING_ORG} (Peer ${USING_PEER})"
+  {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
-  {{ if eq $i 0 }}if{{ else }}elif{{ end }} [ $USING_ORG -eq {{ inc $i }} ]; then
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $USING_ORG -eq {{ inc $i }} ]; then
     export CORE_PEER_LOCALMSPID={{ .MSPID }}
     export CORE_PEER_TLS_ROOTCERT_FILE=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}/tlsca/tlsca.{{ .Domain }}-cert.pem
     export CORE_PEER_MSPCONFIGPATH=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}/users/Admin@{{ .Domain }}/msp
-    export CORE_PEER_ADDRESS=localhost:{{ add 7051 (multiply $i 2000) }}
+    
+    # Calculate address based on peer index
+    {{ range $j, $p := until .PeerCount }}
+    if [ $USING_PEER -eq {{ $j }} ]; then
+      export CORE_PEER_ADDRESS=localhost:{{ calculatePeerPort $i $j 7051 }}
+    fi
+    {{- end }}
+    {{- $firstOrg = false }}
   {{- end }}
 {{- end }}
+  {{- if $firstOrg }}
+  if false; then
+    :
+  {{- end }}
   else
     errorln "ORG Unknown"
   fi
@@ -69,20 +81,28 @@ parsePeerConnectionParameters() {
 }
 
 getOrgName() {
+  {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
-  {{ if eq $i 0 }}if{{ else }}elif{{ end }} [ $1 -eq {{ inc $i }} ]; then
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $1 -eq {{ inc $i }} ]; then
     echo "{{ toLower .Name }}"
+    {{- $firstOrg = false }}
 {{- end }}
   fi
 }
 
 getOrgDomain() {
+  {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
-  {{ if eq $i 0 }}if{{ else }}elif{{ end }} [ $1 -eq {{ inc $i }} ]; then
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $1 -eq {{ inc $i }} ]; then
     echo "{{ .Domain }}"
+    {{- $firstOrg = false }}
   {{- end }}
 {{- end }}
+  {{- if $firstOrg }}
+  if false; then
+    :
+  {{- end }}
   fi
 }
 

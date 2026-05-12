@@ -1,0 +1,4 @@
+include:
+{{- range .Orgs }}
+  - path: ../organizations/{{ toLower .Name }}/compose/compose-ca.yaml
+{{- end }}
