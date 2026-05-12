@@ -17,7 +17,7 @@ Organizations:
     # ID to load the MSP definition as
     ID: {{ $orgMSPID }}
     # MSPDir is the filesystem path which contains the MSP configuration
-    MSPDir: ../organizations/{{ toLower $orgName }}/identities/{{ if gt .OrdererCount 0 }}ordererOrganizations{{ else }}peerOrganizations{{ end }}/{{ $orgDomain }}/msp
+    MSPDir: ../organizations/{{ toLower $orgName }}/identities/{{ if gt .OrdererCount 0 }}orderer{{ else }}peer{{ end }}/msp
     # Policies defines the set of policies at this level of the config tree
     Policies:
       Readers:
@@ -128,8 +128,8 @@ Orderer: &OrdererDefaults
       {{- range $i, $e := until .OrdererCount }}
       - Host: orderer{{$i}}.{{ $orgDomain }}
         Port: 7050
-        ClientTLSCert: ../organizations/{{ $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt
-        ServerTLSCert: ../organizations/{{ $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt
+        ClientTLSCert: ../organizations/{{ $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt
+        ServerTLSCert: ../organizations/{{ $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt
       {{- end }}
       {{- end }}
     {{- end }}
@@ -161,9 +161,9 @@ Orderer: &OrdererDefaults
       Host: orderer{{$i}}.{{ $orgDomain }}
       Port: 7050
       MSPID: {{ $orgMSPID }}
-      Identity: ../organizations/{{ $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/orderers/orderer{{$i}}.{{ $orgDomain }}/msp/signcerts/orderer{{$i}}.{{ $orgDomain }}-cert.pem
-      ClientTLSCert: ../organizations/{{ $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/tls/server.crt
-      ServerTLSCert: ../organizations/{{ $orgName }}/identities/ordererOrganizations/{{ $orgDomain }}/tls/server.crt
+      Identity: ../organizations/{{ $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/msp/signcerts/cert.pem
+      ClientTLSCert: ../organizations/{{ $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt
+      ServerTLSCert: ../organizations/{{ $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt
     {{- end }}
     {{- end }}
   {{- end }}

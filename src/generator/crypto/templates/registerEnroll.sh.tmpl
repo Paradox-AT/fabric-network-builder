@@ -13,7 +13,7 @@ function createOrg{{ add .OrgIndex 1 }}() {
   
   # For peers
   {{ if gt .Org.PeerCount 0 }}
-  ORG_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/identities/peerOrganizations/{{ .Org.Domain }}"
+  ORG_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/identities/peer"
   mkdir -p "${ORG_DIR}"
   export FABRIC_CA_CLIENT_HOME="${ORG_DIR}"
 
@@ -99,7 +99,7 @@ function createOrg{{ add .OrgIndex 1 }}() {
 
   # For orderers
   {{ if gt .Org.OrdererCount 0 }}
-  ORDERER_ORG_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/identities/ordererOrganizations/{{ .Org.Domain }}"
+  ORDERER_ORG_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/identities/orderer"
   mkdir -p "${ORDERER_ORG_DIR}"
   export FABRIC_CA_CLIENT_HOME="${ORDERER_ORG_DIR}"
 

@@ -27,8 +27,8 @@ setGlobals() {
   {{- if gt .PeerCount 0 }}
   {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $USING_ORG -eq {{ inc $i }} ]; then
     export CORE_PEER_LOCALMSPID={{ .MSPID }}
-    export CORE_PEER_TLS_ROOTCERT_FILE=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}/tlsca/tlsca.{{ .Domain }}-cert.pem
-    export CORE_PEER_MSPCONFIGPATH=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}/users/Admin@{{ .Domain }}/msp
+    export CORE_PEER_TLS_ROOTCERT_FILE=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peer/tlsca/tlsca.{{ .Domain }}-cert.pem
+    export CORE_PEER_MSPCONFIGPATH=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peer/users/Admin@{{ .Domain }}/msp
     
     # Calculate address based on peer index
     {{ range $j, $p := until .PeerCount }}
@@ -72,7 +72,7 @@ parsePeerConnectionParameters() {
     ## Set path to TLS certificate
     # Note: This part needs careful mapping if org IDs are dynamic
     # For now assuming variables like ORG1_CA are set or can be derived
-    CA_PATH=${TEST_NETWORK_HOME}/organizations/$(getOrgName $1)/identities/peerOrganizations/$(getOrgDomain $1)/tlsca/tlsca.$(getOrgDomain $1)-cert.pem
+    CA_PATH=${TEST_NETWORK_HOME}/organizations/$(getOrgName $1)/identities/peer/tlsca/tlsca.$(getOrgDomain $1)-cert.pem
     TLSINFO=(--tlsRootCertFiles "${CA_PATH}")
     PEER_CONN_PARMS=("${PEER_CONN_PARMS[@]}" "${TLSINFO[@]}")
     # shift by one to get to the next organization

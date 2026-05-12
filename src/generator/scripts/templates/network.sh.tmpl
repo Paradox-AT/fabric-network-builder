@@ -12,10 +12,13 @@ export VERBOSE=false
 COMPOSE_FILE_BASE=${ROOTDIR}/compose/docker-compose.yaml
 COMPOSE_FILE_CA=${ROOTDIR}/compose/compose-cas.yaml
 
+# Export COMPOSE_PROJECT_NAME to scope all docker-compose operations
+export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+
 # Obtain CONTAINER_IDS and remove them
 function clearContainers() {
-  infoln "Removing remaining containers"
-  docker rm -f $(docker ps -aq --filter label=service=hyperledger-fabric) 2>/dev/null || true
+  infoln "Removing remaining containers for project: ${COMPOSE_PROJECT_NAME}"
+  docker rm -f $(docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}") 2>/dev/null || true
 }
 
 function bootstrap() {
@@ -141,6 +144,23 @@ function generateCerts() {
     infoln "Creating {{ .Name }} Identities"
     set -x
     cryptogen generate --config=${ROOTDIR}/organizations/{{ toLower .Name }}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/{{ toLower .Name }}/identities"
+    
+    # Flatten the cryptogen output to match our Sovereign structure
+    if [ -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations" ]; then
+      mkdir -p ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer
+      mv ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}/* ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/ 2>/dev/null || true
+      rm -rf ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations
+      # Standardize signcerts to cert.pem
+      find ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
+    fi
+    if [ -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations" ]; then
+      mkdir -p ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer
+      mv ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations/{{ .Domain }}/* ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/ 2>/dev/null || true
+      rm -rf ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations
+      # Standardize signcerts to cert.pem
+      find ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
+    fi
+    
     res=$?
     { set +x; } 2>/dev/null
     verifyResult $res "Failed to generate certificates for {{ .Name }}..."

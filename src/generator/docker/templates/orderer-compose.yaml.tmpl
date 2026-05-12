@@ -44,8 +44,8 @@ services:
     working_dir: /root
     command: orderer
     volumes:
-        - ../identities/ordererOrganizations/{{ $org.Domain }}/orderers/orderer{{$i}}.{{ $org.Domain }}/msp:/var/hyperledger/orderer/msp
-        - ../identities/ordererOrganizations/{{ $org.Domain }}/orderers/orderer{{$i}}.{{ $org.Domain }}/tls/:/var/hyperledger/orderer/tls
+        - ../identities/orderer/orderers/orderer{{$i}}.{{ $org.Domain }}/msp:/var/hyperledger/orderer/msp
+        - ../identities/orderer/orderers/orderer{{$i}}.{{ $org.Domain }}/tls/:/var/hyperledger/orderer/tls
         - orderer{{$i}}.{{ $org.Domain }}:/var/hyperledger/production/orderer
     ports:
       - {{ calculateOrdererPort $orgIndex $i 7050 }}:7050

@@ -42,8 +42,8 @@ services:
       - CORE_OPERATIONS_LISTENADDRESS=peer{{$i}}.{{ $org.Domain }}:9444
       - CORE_METRICS_PROVIDER=prometheus
     volumes:
-      - ../identities/peerOrganizations/{{ $org.Domain }}/peers/peer{{$i}}.{{ $org.Domain }}/msp:/etc/hyperledger/fabric/msp
-      - ../identities/peerOrganizations/{{ $org.Domain }}/peers/peer{{$i}}.{{ $org.Domain }}/tls:/etc/hyperledger/fabric/tls
+      - ../identities/peer/peers/peer{{$i}}.{{ $org.Domain }}/msp:/etc/hyperledger/fabric/msp
+      - ../identities/peer/peers/peer{{$i}}.{{ $org.Domain }}/tls:/etc/hyperledger/fabric/tls
       - /var/run/docker.sock:/var/run/docker.sock
       - peer{{$i}}.{{ $org.Domain }}:/var/hyperledger/production
     working_dir: /root
