@@ -18,6 +18,8 @@ services:
     image: hyperledger/fabric-orderer:{{ $fabricVersion }}
     labels:
       service: hyperledger-fabric
+      org: {{ $org.Name }}
+      role: orderer
     environment:
       - FABRIC_LOGGING_SPEC=INFO
       - ORDERER_GENERAL_LISTENADDRESS=0.0.0.0
@@ -39,8 +41,13 @@ services:
       - ORDERER_ADMIN_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
       - ORDERER_ADMIN_TLS_CLIENTROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
       - ORDERER_ADMIN_LISTENADDRESS=0.0.0.0:7053
-      - ORDERER_OPERATIONS_LISTENADDRESS=orderer{{$i}}.{{ $org.Domain }}:9443
+      - ORDERER_OPERATIONS_LISTENADDRESS=0.0.0.0:9443
       - ORDERER_METRICS_PROVIDER=prometheus
+    healthcheck:
+      test: ["CMD", "bash", "-c", "cat < /dev/null > /dev/tcp/localhost/7050"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     working_dir: /root
     command: orderer
     volumes:
@@ -48,9 +55,9 @@ services:
         - ../identities/orderer/orderers/orderer{{$i}}.{{ $org.Domain }}/tls/:/var/hyperledger/orderer/tls
         - orderer{{$i}}.{{ $org.Domain }}:/var/hyperledger/production/orderer
     ports:
-      - {{ calculateOrdererPort $orgIndex $i 7050 }}:7050
-      - {{ calculateOrdererPort $orgIndex $i 7053 }}:7053
-      - {{ calculateOrdererPort $orgIndex $i 9443 }}:9443
+      - {{ $.BindAddress }}:{{ calculateOrdererPort $orgIndex $i 7050 }}:7050
+      - {{ $.BindAddress }}:{{ calculateOrdererPort $orgIndex $i 7053 }}:7053
+      - {{ $.BindAddress }}:{{ calculateOrdererPort $orgIndex $i 9443 }}:9443
     networks:
       - test
 {{- end }}

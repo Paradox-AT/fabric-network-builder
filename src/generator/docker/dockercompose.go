@@ -31,6 +31,7 @@ type OrgComposeData struct {
 	CADatabaseType    string
 	PostgresVersion   string
 	CouchDBVersion    string
+	BindAddress       string
 	PeerStateDatabase func(int) string // returns "leveldb" or "couchdb" for a given peer index
 }
 
@@ -110,6 +111,11 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 		}
 
 		orgCopy := org // capture for closure
+		bindAddress := cfg.BindAddress
+		if bindAddress == "" {
+			bindAddress = "0.0.0.0"
+		}
+
 		data := OrgComposeData{
 			Org:             org,
 			OrgIndex:        i,
@@ -118,6 +124,7 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 			CADatabaseType:  cfg.CADatabaseType,
 			PostgresVersion: cfg.PostgresVersion,
 			CouchDBVersion:  cfg.CouchDBVersion,
+			BindAddress:     bindAddress,
 			PeerStateDatabase: func(peerIndex int) string {
 				return orgCopy.PeerStateDatabase(peerIndex)
 			},

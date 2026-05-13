@@ -10,11 +10,19 @@ services:
     image: couchdb:{{ $.CouchDBVersion }}
     labels:
       service: hyperledger-fabric
+      org: {{ $.Org.Name }}
+      role: couchdb
+      peer: peer{{$i}}.{{ $.Org.Domain }}
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
     ports:
-      - {{ calculatePeerPort $.OrgIndex $i 5984 }}:5984
+      - {{ $.BindAddress }}:{{ calculatePeerPort $.OrgIndex $i 5984 }}:5984
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5984/_up"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - test
 

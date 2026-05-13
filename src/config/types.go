@@ -13,6 +13,7 @@ type NetworkConfig struct {
 	DeploymentTarget string
 	ChaincodeMode    string
 	ChannelCount     int
+	BindAddress      string // IP address to bind ports to (e.g., "0.0.0.0" or "127.0.0.1")
 	Orgs             []OrgConfig
 }
 

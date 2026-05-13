@@ -30,8 +30,8 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 		cfg = &config.NetworkConfig{
 			NetworkName:      "fabric-network",
 			FabricVersion:    "3.1.4",
-			CAVersion:        "1.5.12",
-			CouchDBVersion:   "3.3.3",
+			CAVersion:        "1.5.19",
+			CouchDBVersion:   "3.5.1",
 			CADatabaseType:   "sqlite",
 			PostgresVersion:  "16.2",
 			OrdererType:      "etcdraft",
@@ -39,6 +39,7 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 			DeploymentTarget: "Docker Compose",
 			ChaincodeMode:    "Embedded",
 			ChannelCount:     1,
+			BindAddress:      "0.0.0.0",
 		}
 		orgCountStr = "3"
 		channelCountStr = "1"
@@ -136,6 +137,14 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 						huh.NewOption("External Chaincode-as-a-Service (CCaaS)", "CCaaS"),
 					).
 					Value(&cfg.ChaincodeMode),
+				huh.NewSelect[string]().
+					Title("Bind Address (Port Exposure):").
+					Description("Choose 0.0.0.0 for external access or 127.0.0.1 for local only.").
+					Options(
+						huh.NewOption("0.0.0.0 (All interfaces - recommended for Portainer)", "0.0.0.0"),
+						huh.NewOption("127.0.0.1 (Localhost only - more secure)", "127.0.0.1"),
+					).
+					Value(&cfg.BindAddress),
 			),
 			huh.NewGroup(
 				huh.NewInput().
@@ -311,6 +320,7 @@ func PrintSummary(cfg *config.NetworkConfig) {
 	}
 	fmt.Printf("Deploy Target:   %s\n", cfg.DeploymentTarget)
 	fmt.Printf("Chaincode Mode:  %s\n", cfg.ChaincodeMode)
+	fmt.Printf("Bind Address:    %s\n", cfg.BindAddress)
 	fmt.Printf("Channels:        %d\n", cfg.ChannelCount)
 
 	totalOrderers := 0

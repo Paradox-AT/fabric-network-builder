@@ -18,6 +18,8 @@ services:
     image: hyperledger/fabric-peer:{{ $fabricVersion }}
     labels:
       service: hyperledger-fabric
+      org: {{ $org.Name }}
+      role: peer
     environment:
       - FABRIC_LOGGING_SPEC=INFO
       - CORE_PEER_TLS_ENABLED=true
@@ -39,8 +41,13 @@ services:
       - CORE_PEER_GOSSIP_USELEADERELECTION=true
       - CORE_PEER_GOSSIP_ORGLEADER=false
       - CORE_PEER_GOSSIP_SKIPHANDSHAKE=true
-      - CORE_OPERATIONS_LISTENADDRESS=peer{{$i}}.{{ $org.Domain }}:9444
+      - CORE_OPERATIONS_LISTENADDRESS=0.0.0.0:9444
       - CORE_METRICS_PROVIDER=prometheus
+    healthcheck:
+      test: ["CMD", "peer", "node", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     volumes:
       - ../identities/peer/peers/peer{{$i}}.{{ $org.Domain }}/msp:/etc/hyperledger/fabric/msp
       - ../identities/peer/peers/peer{{$i}}.{{ $org.Domain }}/tls:/etc/hyperledger/fabric/tls
@@ -49,8 +56,8 @@ services:
     working_dir: /root
     command: peer node start
     ports:
-      - {{ calculatePeerPort $orgIndex $i 7051 }}:7051
-      - {{ calculatePeerPort $orgIndex $i 9444 }}:9444
+      - {{ $.BindAddress }}:{{ calculatePeerPort $orgIndex $i 7051 }}:7051
+      - {{ $.BindAddress }}:{{ calculatePeerPort $orgIndex $i 9444 }}:9444
     networks:
       - test
 {{- end }}
