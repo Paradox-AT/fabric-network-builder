@@ -10,6 +10,7 @@ import (
 	"text/template"
 
 	"network-builder/src/config"
+	"network-builder/src/generator/utils"
 )
 
 //go:embed templates/registerEnroll.sh.tmpl templates/fabric-ca-server-config.yaml.tmpl
@@ -38,33 +39,14 @@ func (g *FabricCAGenerator) Generate(cfg *config.NetworkConfig, outputDir string
 		return nil
 	}
 
-	funcs := template.FuncMap{
-		"toLower": strings.ToLower,
-		"calculateCAPort": func(orgIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 2000 + (offset % 100)
-		},
-		"calculateDatabasePort": func(orgIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 1000 + (offset % 100)
-		},
-		"until": func(count int) []int {
-			var r []int
-			for i := 0; i < count; i++ {
-				r = append(r, i)
-			}
-			return r
-		},
-		"add": func(a, b int) int {
-			return a + b
-		},
-	}
 
 	// 1. Parse templates
-	enrollTmpl, err := template.New("registerEnroll.sh.tmpl").Funcs(funcs).ParseFS(caTmplFS, "templates/registerEnroll.sh.tmpl")
+	enrollTmpl, err := template.New("registerEnroll.sh.tmpl").Funcs(utils.GetFuncMap()).ParseFS(caTmplFS, "templates/registerEnroll.sh.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to parse registerEnroll template: %w", err)
 	}
 
-	serverConfigTmpl, err := template.New("fabric-ca-server-config.yaml.tmpl").Funcs(funcs).ParseFS(caTmplFS, "templates/fabric-ca-server-config.yaml.tmpl")
+	serverConfigTmpl, err := template.New("fabric-ca-server-config.yaml.tmpl").Funcs(utils.GetFuncMap()).ParseFS(caTmplFS, "templates/fabric-ca-server-config.yaml.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to parse CA server config template: %w", err)
 	}

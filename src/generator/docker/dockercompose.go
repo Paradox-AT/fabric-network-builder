@@ -10,6 +10,7 @@ import (
 	"text/template"
 
 	"network-builder/src/config"
+	"network-builder/src/generator/utils"
 )
 
 //go:embed templates/*.tmpl
@@ -37,36 +38,7 @@ type OrgComposeData struct {
 
 // Generate implements the Generator interface
 func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir string) error {
-	funcs := template.FuncMap{
-		"until": func(count int) []int {
-			var r []int
-			for i := 0; i < count; i++ {
-				r = append(r, i)
-			}
-			return r
-		},
-		"calculatePeerPort": func(orgIndex, peerIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 4000 + (peerIndex * 100) + (offset % 100)
-		},
-		"calculateOrdererPort": func(orgIndex, ordererIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 3000 + (ordererIndex * 100) + (offset % 100)
-		},
-		"calculateCAPort": func(orgIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 2000 + (offset % 100)
-		},
-		"calculateDatabasePort": func(orgIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 1000 + (offset % 100)
-		},
-		"toLower": strings.ToLower,
-		"orgHasCouchDB": func(org config.OrgConfig) bool {
-			for p := 0; p < org.PeerCount; p++ {
-				if org.PeerStateDatabase(p) == "couchdb" {
-					return true
-				}
-			}
-			return false
-		},
-	}
+	funcs := utils.GetFuncMap()
 
 	// 1. Parse all templates
 	peerTmpl, err := template.New("peer-compose.yaml.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/peer-compose.yaml.tmpl")

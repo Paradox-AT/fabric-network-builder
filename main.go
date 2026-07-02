@@ -116,7 +116,7 @@ func cleanArtifacts(outputDir string) {
 	fmt.Println("Cleaning up old artifacts...")
 
 	// Generated subdirectories
-	subDirs := []string{"organizations", "configtx", "scripts", "compose"}
+	subDirs := []string{"compose", "channel-artifacts", "configtx", "organizations", "scripts"}
 	for _, d := range subDirs {
 		target := filepath.Join(outputDir, d)
 		if err := os.RemoveAll(target); err == nil {
@@ -125,7 +125,7 @@ func cleanArtifacts(outputDir string) {
 	}
 
 	// Generated top-level files
-	files := []string{"network.sh", "network.config"}
+	files := []string{"network.sh", "network.config", "log.txt"}
 	for _, f := range files {
 		target := filepath.Join(outputDir, f)
 		if _, err := os.Stat(target); err == nil {

@@ -10,6 +10,7 @@ import (
 	"text/template"
 
 	"network-builder/src/config"
+	"network-builder/src/generator/utils"
 )
 
 //go:embed templates/crypto-config.yaml.tmpl
@@ -30,18 +31,8 @@ func (g *CryptogenGenerator) Generate(cfg *config.NetworkConfig, outputDir strin
 		return nil
 	}
 
-	// Parse the template
-	funcs := template.FuncMap{
-		"until": func(count int) []int {
-			var r []int
-			for i := 0; i < count; i++ {
-				r = append(r, i)
-			}
-			return r
-		},
-	}
 
-	tmpl, err := template.New("crypto-config.yaml.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/crypto-config.yaml.tmpl")
+	tmpl, err := template.New("crypto-config.yaml.tmpl").Funcs(utils.GetFuncMap()).ParseFS(templateFS, "templates/crypto-config.yaml.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to parse crypto-config template: %w", err)
 	}

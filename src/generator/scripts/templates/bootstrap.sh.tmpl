@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # This script bootstraps the Hyperledger Fabric binaries and docker images
 # based on the configuration selected in the Network Builder.
@@ -39,7 +40,7 @@ echo "=== Detected Platform: ${OS_NAME}-${ARCH} ==="
 
 # Registry detection logic from official install-fabric.sh
 dockerFabricRegistry() {
-  local version=$1
+  local version=${1:-}
   # Remove trailing pre-release or metadata identifiers
   version="${version%%[-+]*}"
   case "${version}" in
@@ -53,7 +54,7 @@ dockerFabricRegistry() {
 }
 
 dockerCARegistry() {
-  local version=$1
+  local version=${1:-}
   version="${version%%[-+]*}"
   case "${version}" in
     1.[0-4].*|1.5.[0-9]|1.5.1[0-4])
@@ -76,9 +77,9 @@ fi
 PLATFORM=${OS_NAME}-${ARCH}
 
 download() {
-  local LABEL=$1
-  local URL=$2
-  local FILE=$3
+  local LABEL=${1:-}
+  local URL=${2:-}
+  local FILE=${3:-}
 
   if [ -f "${FILE}" ]; then
     echo "==> ${LABEL} already downloaded."

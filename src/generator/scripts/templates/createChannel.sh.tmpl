@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
 . ${ROOTDIR}/scripts/envVar.sh
 . ${ROOTDIR}/network.config
 
-CHANNEL_NAME="$1"
-DELAY="$2"
-MAX_RETRY="$3"
-VERBOSE="$4"
-BFT="$5"
+# FABRIC_CFG_PATH has two distinct values in this script:
+#   - configtx/ for configtxgen + osnadmin (orderer admin tools)
+#   - config/   for the peer CLI (needs core.yaml)
+# Export both once here and reference them by name below.
+export FABRIC_CFG_PATH_ORDERER="${ROOTDIR}/configtx"
+export FABRIC_CFG_PATH_PEER="${ROOTDIR}/config"
 
-: "${CHANNEL_NAME:="mychannel"}"
-: "${DELAY:="${CLI_DELAY:-3}"}"
-: "${MAX_RETRY:="${MAX_RETRY:-5}"}"
-: "${VERBOSE:="false"}"
-: "${BFT:=0}"
+CHANNEL_NAME="${1:-mychannel}"
+DELAY="${2:-3}"
+MAX_RETRY="${3:-5}"
+VERBOSE="${4:-false}"
+BFT="${5:-0}"
 
 if [ ! -d "${ROOTDIR}/channel-artifacts" ]; then
 	mkdir ${ROOTDIR}/channel-artifacts
@@ -25,11 +27,18 @@ createChannelGenesisBlock() {
 	if [ "$?" -ne 0 ]; then
 		fatalln "configtxgen tool not found."
 	fi
+
+	local block_file="${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block"
+	if [ -f "${block_file}" ]; then
+		warnln "Channel genesis block '${CHANNEL_NAME}.block' already exists. Skipping generation."
+		return 0
+	fi
+
 	set -x
-	FABRIC_CFG_PATH=${ROOTDIR}/configtx configtxgen -profile ApplicationChannel -outputBlock ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block -channelID $CHANNEL_NAME
+	FABRIC_CFG_PATH=${FABRIC_CFG_PATH_ORDERER} configtxgen -profile ApplicationChannel -outputBlock ${block_file} -channelID $CHANNEL_NAME
 	res=$?
 	{ set +x; } 2>/dev/null
-  verifyResult $res "Failed to generate channel configuration transaction..."
+	verifyResult $res "Failed to generate channel configuration transaction..."
 }
 
 createChannel() {
@@ -37,44 +46,61 @@ createChannel() {
 	local rc=1
 	local COUNTER=1
 	infoln "Joining orderers to the channel"
-	
+
 	# We use osnadmin for modern channel creation/joining
 {{- range $orgIndex, $org := .Orgs }}
   {{- if gt .OrdererCount 0 }}
     {{- $orgDomain := .Domain }}
     {{- $orgName := .Name }}
     {{- range $i, $e := until .OrdererCount }}
-	rc=1
-	COUNTER=1
-	infoln "Joining orderer{{$i}}.{{ $orgDomain }} to the channel..."
-	while [ $rc -ne 0 ] && [ $COUNTER -lt $MAX_RETRY ] ; do
-		sleep $DELAY
-		set -x
-		FABRIC_CFG_PATH=${ROOTDIR}/configtx osnadmin channel join --channelID ${CHANNEL_NAME} --config-block ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block -o localhost:{{ calculateOrdererPort $orgIndex $i 7053 }} --ca-file "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/tlsca/tlsca.{{ $orgDomain }}-cert.pem" --client-cert "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt" --client-key "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.key" >&log.txt
-		res=$?
-		{ set +x; } 2>/dev/null
-		rc=$res
-		COUNTER=$(expr $COUNTER + 1)
-	done
+	infoln "Checking if orderer{{$i}}.{{ $orgDomain }} is already on channel '${CHANNEL_NAME}'..."
+	if FABRIC_CFG_PATH=${FABRIC_CFG_PATH_ORDERER} osnadmin channel list \
+		-o localhost:{{ calculateOrdererPort $orgIndex $i 7053 }} \
+		--ca-file "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/tlsca/tlsca.{{ $orgDomain }}-cert.pem" \
+		--client-cert "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt" \
+		--client-key "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.key" \
+		2>/dev/null | grep -q "\"${CHANNEL_NAME}\""; then
+		warnln "Orderer orderer{{$i}}.{{ $orgDomain }} is already joined to '${CHANNEL_NAME}'. Skipping."
+	else
+		rc=1
+		COUNTER=1
+		infoln "Joining orderer{{$i}}.{{ $orgDomain }} to the channel..."
+		while [ $rc -ne 0 ] && [ $COUNTER -lt $MAX_RETRY ] ; do
+			sleep $DELAY
+			set -x
+			FABRIC_CFG_PATH=${FABRIC_CFG_PATH_ORDERER} osnadmin channel join --channelID ${CHANNEL_NAME} --config-block ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block -o localhost:{{ calculateOrdererPort $orgIndex $i 7053 }} --ca-file "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/tlsca/tlsca.{{ $orgDomain }}-cert.pem" --client-cert "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.crt" --client-key "${ROOTDIR}/organizations/{{ toLower $orgName }}/identities/orderer/orderers/orderer{{$i}}.{{ $orgDomain }}/tls/server.key" >&log.txt
+			res=$?
+			{ set +x; } 2>/dev/null
+			rc=$res
+			COUNTER=$(expr $COUNTER + 1)
+		done
+		cat log.txt
+		verifyResult $res "Orderer orderer{{$i}}.{{ $orgDomain }} failed to join channel '${CHANNEL_NAME}'"
+	fi
     {{- end }}
   {{- end }}
 {{- end }}
-	cat log.txt
-	verifyResult $res "Channel creation failed"
 }
 
 # joinChannel ORG PEER
 joinChannel() {
-  ORG=$1
-  PEER=$2
+  ORG=${1:-}
+  PEER=${2:-}
   setGlobals $ORG $PEER
 	local rc=1
 	local COUNTER=1
+
+	infoln "Checking if peer${PEER} of Org${ORG} is already on channel '${CHANNEL_NAME}'..."
+	if FABRIC_CFG_PATH=${FABRIC_CFG_PATH_PEER} peer channel list 2>/dev/null | grep -q "^${CHANNEL_NAME}$"; then
+		warnln "Peer${PEER} of Org${ORG} is already joined to '${CHANNEL_NAME}'. Skipping."
+		return 0
+	fi
+
 	## Sometimes Join takes time, hence retry
 	while [ $rc -ne 0 ] && [ $COUNTER -lt $MAX_RETRY ] ; do
     sleep $DELAY
     set -x
-    FABRIC_CFG_PATH=${ROOTDIR}/config peer channel join -b ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block >&log.txt
+    FABRIC_CFG_PATH=${FABRIC_CFG_PATH_PEER} peer channel join -b ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block >&log.txt
     res=$?
     { set +x; } 2>/dev/null
 		rc=$res

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/template"
 
 	"network-builder/src/config"
+	"network-builder/src/generator/utils"
 )
 
 //go:embed templates/configtx.yaml.tmpl
@@ -25,26 +25,12 @@ func NewConfigtxGenerator() *ConfigtxGenerator {
 
 // Generate implements the Generator interface
 func (g *ConfigtxGenerator) Generate(cfg *config.NetworkConfig, outputDir string) error {
+	// nextID is generator-local state; merge it into the shared FuncMap.
 	currentID := 0
-	funcs := template.FuncMap{
-		"until": func(count int) []int {
-			var r []int
-			for i := 0; i < count; i++ {
-				r = append(r, i)
-			}
-			return r
-		},
-		"add": func(a, b int) int {
-			return a + b
-		},
-		"multiply": func(a, b int) int {
-			return a * b
-		},
-		"toLower": strings.ToLower,
-		"nextID": func() int {
-			currentID++
-			return currentID
-		},
+	funcs := utils.GetFuncMap()
+	funcs["nextID"] = func() int {
+		currentID++
+		return currentID
 	}
 
 	tmpl, err := template.New("configtx.yaml.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/configtx.yaml.tmpl")

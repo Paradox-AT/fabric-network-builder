@@ -192,7 +192,7 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 						CAName:        fmt.Sprintf("ca-org%d", i+1),
 						OrdererCount:  1,
 						PeerCount:     2,
-						StateDatabase: "LevelDB",
+						StateDatabase: "leveldb",
 					}
 				}
 			}

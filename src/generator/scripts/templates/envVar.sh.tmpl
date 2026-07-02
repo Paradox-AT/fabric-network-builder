@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # This is a collection of bash functions used by different scripts
 
@@ -7,16 +8,24 @@ TEST_NETWORK_HOME=${TEST_NETWORK_HOME:-$(cd "$(dirname "$0")"/.. && pwd)}
 
 export CORE_PEER_TLS_ENABLED=true
 
+# Get orderer CA
+{{- range $i, $org := .Orgs }}
+  {{- if gt .OrdererCount 0 }}
+export ORDERER_CA=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/orderer/tlsca/tlsca.{{ .Domain }}-cert.pem
+    {{- break }}
+  {{- end }}
+{{- end }}
+
 # Set environment variables for the peer org
 setGlobals() {
   local USING_ORG=""
   local USING_PEER=""
-  if [ -z "$OVERRIDE_ORG" ]; then
+  if [ -z "${OVERRIDE_ORG:-}" ]; then
     USING_ORG=$1
   else
     USING_ORG="${OVERRIDE_ORG}"
   fi
-  if [ -z "$2" ]; then
+  if [ -z "${2:-}" ]; then
     USING_PEER=0
   else
     USING_PEER=$2
@@ -59,8 +68,8 @@ parsePeerConnectionParameters() {
   PEER_CONN_PARMS=()
   PEERS=""
   while [ "$#" -gt 0 ]; do
-    setGlobals $1
-    PEER="peer0.org$1"
+    setGlobals ${1:-}
+    PEER="peer0.org${1:-}"
     ## Set peer addresses
     if [ -z "$PEERS" ]
     then
@@ -72,7 +81,7 @@ parsePeerConnectionParameters() {
     ## Set path to TLS certificate
     # Note: This part needs careful mapping if org IDs are dynamic
     # For now assuming variables like ORG1_CA are set or can be derived
-    CA_PATH=${TEST_NETWORK_HOME}/organizations/$(getOrgName $1)/identities/peer/tlsca/tlsca.$(getOrgDomain $1)-cert.pem
+    CA_PATH=${TEST_NETWORK_HOME}/organizations/$(getOrgName ${1:-})/identities/peer/tlsca/tlsca.$(getOrgDomain ${1:-})-cert.pem
     TLSINFO=(--tlsRootCertFiles "${CA_PATH}")
     PEER_CONN_PARMS=("${PEER_CONN_PARMS[@]}" "${TLSINFO[@]}")
     # shift by one to get to the next organization
@@ -83,7 +92,7 @@ parsePeerConnectionParameters() {
 getOrgName() {
   {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
-  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $1 -eq {{ inc $i }} ]; then
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
     echo "{{ toLower .Name }}"
     {{- $firstOrg = false }}
 {{- end }}
@@ -94,7 +103,7 @@ getOrgDomain() {
   {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
-  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $1 -eq {{ inc $i }} ]; then
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
     echo "{{ .Domain }}"
     {{- $firstOrg = false }}
   {{- end }}
@@ -107,7 +116,7 @@ getOrgDomain() {
 }
 
 verifyResult() {
-  if [ $1 -ne 0 ]; then
-    fatalln "$2"
+  if [ ${1:-0} -ne 0 ]; then
+    fatalln "${2:-}"
   fi
 }

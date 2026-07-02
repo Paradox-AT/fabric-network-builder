@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/template"
 
 	"network-builder/src/config"
+	"network-builder/src/generator/utils"
 )
 
 //go:embed templates
@@ -31,6 +31,9 @@ func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string)
 		"utils.sh.tmpl":         "scripts/utils.sh",
 		"createChannel.sh.tmpl": "scripts/createChannel.sh",
 		"bootstrap.sh.tmpl":     "scripts/bootstrap.sh",
+		"deployCC.sh.tmpl":      "scripts/deployCC.sh",
+		"ccutils.sh.tmpl":       "scripts/ccutils.sh",
+		"packageCC.sh.tmpl":     "scripts/packageCC.sh",
 	}
 
 	for tmplName, fileName := range scriptFiles {
@@ -57,39 +60,7 @@ func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string)
 }
 
 func (g *ScriptsGenerator) generateFile(cfg *config.NetworkConfig, tmplName, destPath string) error {
-	funcs := template.FuncMap{
-		"until": func(count int) []int {
-			var r []int
-			for i := 0; i < count; i++ {
-				r = append(r, i)
-			}
-			return r
-		},
-		"toLower": strings.ToLower,
-		"inc": func(i int) int {
-			return i + 1
-		},
-		"add": func(a, b int) int {
-			return a + b
-		},
-		"multiply": func(a, b int) int {
-			return a * b
-		},
-		"calculatePeerPort": func(orgIndex, peerIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 4000 + (peerIndex * 100) + (offset % 100)
-		},
-		"calculateOrdererPort": func(orgIndex, ordererIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 3000 + (ordererIndex * 100) + (offset % 100)
-		},
-		"calculateCAPort": func(orgIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 2000 + (offset % 100)
-		},
-		"calculateDatabasePort": func(orgIndex, offset int) int {
-			return ((orgIndex + 1) * 10000) + 1000 + (offset % 100)
-		},
-	}
-
-	tmpl, err := template.New(tmplName).Funcs(funcs).ParseFS(templateFS, "templates/"+tmplName)
+	tmpl, err := template.New(tmplName).Funcs(utils.GetFuncMap()).ParseFS(templateFS, "templates/"+tmplName)
 	if err != nil {
 		return fmt.Errorf("failed to parse template %s: %w", tmplName, err)
 	}
