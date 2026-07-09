@@ -3,7 +3,7 @@ set -euo pipefail
 
 # This is a collection of bash functions used by different scripts
 
-TEST_NETWORK_HOME=${TEST_NETWORK_HOME:-$(cd "$(dirname "$0")"/.. && pwd)}
+TEST_NETWORK_HOME=${TEST_NETWORK_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)}
 . ${TEST_NETWORK_HOME}/scripts/utils.sh
 
 export CORE_PEER_TLS_ENABLED=true
@@ -30,7 +30,7 @@ setGlobals() {
   else
     USING_PEER=$2
   fi
-  infoln "Using organization ${USING_ORG} (Peer ${USING_PEER})"
+  if [ "${VERBOSE:-false}" = "true" ]; then infoln "Using organization ${USING_ORG} (Peer ${USING_PEER})"; fi
   {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
@@ -81,7 +81,7 @@ parsePeerConnectionParameters() {
     ## Set path to TLS certificate
     # Note: This part needs careful mapping if org IDs are dynamic
     # For now assuming variables like ORG1_CA are set or can be derived
-    CA_PATH=${TEST_NETWORK_HOME}/organizations/$(getOrgName ${1:-})/identities/peer/tlsca/tlsca.$(getOrgDomain ${1:-})-cert.pem
+    CA_PATH=${TEST_NETWORK_HOME}/organizations/$(getOrgDir ${1:-})/identities/peer/tlsca/tlsca.$(getOrgDomain ${1:-})-cert.pem
     TLSINFO=(--tlsRootCertFiles "${CA_PATH}")
     PEER_CONN_PARMS=("${PEER_CONN_PARMS[@]}" "${TLSINFO[@]}")
     # shift by one to get to the next organization
@@ -89,13 +89,29 @@ parsePeerConnectionParameters() {
   done
 }
 
+# Returns the display name of the org (proper case, e.g. "Org1")
 getOrgName() {
+  {{- $firstOrg := true }}
+{{- range $i, $org := .Orgs }}
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
+    echo "{{ .Name }}"
+    {{- $firstOrg = false }}
+{{- end }}
+  else
+    fatalln "getOrgName: unknown org index '${1:-}'"
+  fi
+}
+
+# Returns the lowercase directory name of the org (e.g. "org1") for filesystem paths
+getOrgDir() {
   {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
   {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
     echo "{{ toLower .Name }}"
     {{- $firstOrg = false }}
 {{- end }}
+  else
+    fatalln "getOrgDir: unknown org index '${1:-}'"
   fi
 }
 
@@ -112,11 +128,9 @@ getOrgDomain() {
   if false; then
     :
   {{- end }}
+  else
+    fatalln "getOrgDomain: unknown org index '${1:-}'"
   fi
 }
 
-verifyResult() {
-  if [ ${1:-0} -ne 0 ]; then
-    fatalln "${2:-}"
-  fi
-}
+# verifyResult is exported by utils.sh — do not redefine it here.

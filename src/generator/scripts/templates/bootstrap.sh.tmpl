@@ -143,7 +143,7 @@ echo "=== Pulling Fabric Docker Images from ${FABRIC_REGISTRY} ==="
 for image in peer orderer ccenv baseos; do
   FULL_IMAGE="${FABRIC_REGISTRY}/fabric-${image}:${FABRIC_VERSION}"
   echo "==> Pulling ${FULL_IMAGE}..."
-  docker pull "${FULL_IMAGE}" > /dev/null 2>&1
+  docker pull "${FULL_IMAGE}" || { echo "ERROR: Failed to pull ${FULL_IMAGE}. Check registry connectivity and image tag."; exit 1; }
   docker tag "${FULL_IMAGE}" "hyperledger/fabric-${image}:${FABRIC_VERSION}"
   docker tag "${FULL_IMAGE}" "hyperledger/fabric-${image}"
 done
@@ -152,14 +152,14 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
   echo "=== Pulling Fabric CA Image from ${CA_REGISTRY} ==="
   FULL_CA_IMAGE="${CA_REGISTRY}/fabric-ca:${CA_VERSION}"
   echo "==> Pulling ${FULL_CA_IMAGE}..."
-  docker pull "${FULL_CA_IMAGE}" > /dev/null 2>&1
+  docker pull "${FULL_CA_IMAGE}" || { echo "ERROR: Failed to pull ${FULL_CA_IMAGE}."; exit 1; }
   docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca:${CA_VERSION}"
   docker tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca"
   
   if [ "${CA_DATABASE_TYPE}" == "postgres" ]; then
     echo "=== Pulling Postgres Image ==="
     echo "==> Pulling postgres:${POSTGRES_VERSION}..."
-    docker pull "postgres:${POSTGRES_VERSION}" > /dev/null 2>&1
+    docker pull "postgres:${POSTGRES_VERSION}" || { echo "ERROR: Failed to pull postgres:${POSTGRES_VERSION}."; exit 1; }
   fi
 fi
 
@@ -176,12 +176,12 @@ fi
 if [ -n "${COUCHDB_VERSION}" ]; then
   echo "=== Pulling CouchDB Image ==="
   echo "==> Pulling couchdb:${COUCHDB_VERSION}..."
-  docker pull "couchdb:${COUCHDB_VERSION}" > /dev/null 2>&1
+  docker pull "couchdb:${COUCHDB_VERSION}" || { echo "ERROR: Failed to pull couchdb:${COUCHDB_VERSION}."; exit 1; }
 fi
 {{- end }}
 
 echo "=== Pulling Busybox for utility tasks ==="
-docker pull busybox > /dev/null 2>&1
+docker pull busybox || { echo "ERROR: Failed to pull busybox."; exit 1; }
 
 echo "=== Bootstrap Complete ==="
 echo "Binaries are located in: ${ROOTDIR}/bin"

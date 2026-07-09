@@ -8,11 +8,13 @@ CC_SRC_PATH=${2}
 CC_SRC_LANGUAGE=${3}
 CC_VERSION=${4}
 
-println "executing with the following"
-println "- CC_NAME: ${C_GREEN}${CC_NAME}${C_RESET}"
-println "- CC_SRC_PATH: ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
-println "- CC_SRC_LANGUAGE: ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
-println "- CC_VERSION: ${C_GREEN}${CC_VERSION}${C_RESET}"
+if [ "${VERBOSE:-false}" = "true" ]; then
+  println "executing with the following"
+  println "- CC_NAME: ${C_GREEN}${CC_NAME}${C_RESET}"
+  println "- CC_SRC_PATH: ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
+  println "- CC_SRC_LANGUAGE: ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
+  println "- CC_VERSION: ${C_GREEN}${CC_VERSION}${C_RESET}"
+fi
 
 ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
 export FABRIC_CFG_PATH=${ROOTDIR}/config
@@ -41,18 +43,14 @@ if [ "$CC_SRC_LANGUAGE" = "go" ]; then
   CC_RUNTIME_LANGUAGE=golang
 
   infoln "Vendoring Go dependencies at $CC_SRC_PATH"
-  pushd $CC_SRC_PATH
-  GO111MODULE=on go mod vendor
-  popd
+  run_verbose bash -c "cd '$CC_SRC_PATH' && GO111MODULE=on go mod vendor"
   successln "Finished vendoring Go dependencies"
 
 elif [ "$CC_SRC_LANGUAGE" = "java" ]; then
   CC_RUNTIME_LANGUAGE=java
 
   infoln "Compiling Java code..."
-  pushd $CC_SRC_PATH
-  ./gradlew installDist
-  popd
+  run_verbose bash -c "cd '$CC_SRC_PATH' && ./gradlew installDist"
   successln "Finished compiling Java code"
   CC_SRC_PATH=$CC_SRC_PATH/build/install/$CC_NAME
 
@@ -63,10 +61,7 @@ elif [ "$CC_SRC_LANGUAGE" = "typescript" ]; then
   CC_RUNTIME_LANGUAGE=node
 
   infoln "Compiling TypeScript code into JavaScript..."
-  pushd $CC_SRC_PATH
-  npm install
-  npm run build
-  popd
+  run_verbose bash -c "cd '$CC_SRC_PATH' && npm install && npm run build"
   successln "Finished compiling TypeScript code into JavaScript"
 
 else
@@ -88,19 +83,18 @@ packageChaincode() {
     mkdir -p "${pkg_dir}"
   fi
 
-  if [ -f "${pkg_file}" ]; then
-    warnln "Chaincode package '${CC_NAME}_${CC_VERSION}.tar.gz' already exists. Skipping re-packaging."
-  else
-    set -x
-    set +e
-    peer lifecycle chaincode package "${pkg_file}" --path ${CC_SRC_PATH} --lang ${CC_RUNTIME_LANGUAGE} --label ${CC_NAME}_${CC_VERSION} >&log.txt
-    res=$?
-    set -e
-    { set +x; } 2>/dev/null
+  infoln "Packaging chaincode '${CC_NAME}_${CC_VERSION}.tar.gz'..."
+  debug_on
+  set +e
+  peer lifecycle chaincode package "${pkg_file}" --path ${CC_SRC_PATH} --lang ${CC_RUNTIME_LANGUAGE} --label ${CC_NAME}_${CC_VERSION} >&log.txt
+  res=$?
+  set -e
+  debug_off
+  if [ $res -ne 0 ] || [ "${VERBOSE:-false}" = "true" ]; then
     cat log.txt
-    verifyResult $res "Chaincode packaging has failed"
-    successln "Chaincode is packaged"
   fi
+  verifyResult $res "Chaincode packaging has failed"
+  successln "Chaincode is packaged"
 }
 
 ## package the chaincode

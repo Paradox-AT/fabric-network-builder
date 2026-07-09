@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-C_RESET='\033[0m'
-C_RED='\033[0;31m'
-C_GREEN='\033[0;32m'
-C_BLUE='\033[0;34m'
-C_YELLOW='\033[1;33m'
+# Initialize colors using terminal capabilities if stdout is a TTY and supports color
+if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
+  C_RESET="$(tput sgr0)"
+  C_RED="$(tput setaf 1)"
+  C_GREEN="$(tput setaf 2)"
+  C_BLUE="$(tput setaf 4)"
+  C_YELLOW="$(tput setaf 3)"
+else
+  C_RESET=""
+  C_RED=""
+  C_GREEN=""
+  C_BLUE=""
+  C_YELLOW=""
+fi
 
 function println() {
   echo -e "${1:-}"
@@ -37,6 +46,53 @@ function verifyResult() {
     fatalln "${2:-}"
   fi
 }
+
+if docker compose version >/dev/null 2>&1; then
+  function docker_compose() {
+    docker compose "$@"
+  }
+elif docker-compose version >/dev/null 2>&1; then
+  function docker_compose() {
+    docker-compose "$@"
+  }
+else
+  function docker_compose() {
+    fatalln "Neither 'docker compose' nor 'docker-compose' command found. Please install Docker Compose."
+  }
+fi
+export -f docker_compose
+
+function debug_on() {
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    set -x
+  fi
+}
+
+function debug_off() {
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    { set +x; } 2>/dev/null
+  fi
+}
+
+function run_verbose() {
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    "$@"
+  else
+    local log_file="log.txt"
+    set +e
+    "$@" &>"${log_file}"
+    local res=$?
+    set -e
+    if [ $res -ne 0 ]; then
+      cat "${log_file}"
+    fi
+    return $res
+  fi
+}
+
+export -f debug_on
+export -f debug_off
+export -f run_verbose
 
 export -f errorln
 export -f successln

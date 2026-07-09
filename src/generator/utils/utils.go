@@ -28,6 +28,7 @@ func GetFuncMap() template.FuncMap {
 			return i + 1
 		},
 		"toLower": strings.ToLower,
+		"toUpper": strings.ToUpper,
 		"nextID": func() int {
 			currentID++
 			return currentID

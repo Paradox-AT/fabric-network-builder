@@ -9,6 +9,7 @@ networks:
     name: fabric_test
 
 services:
+{{- $orgUpper := toUpper $org.Name }}
   {{- if eq $.CADatabaseType "postgres" }}
   db.ca.{{ $org.Domain }}:
     container_name: db.ca.{{ $org.Domain }}
@@ -18,13 +19,13 @@ services:
       org: {{ $org.Name }}
       role: ca-db
     environment:
-      - POSTGRES_USER=ca_admin
-      - POSTGRES_PASSWORD=ca_admin_pw
+      - POSTGRES_USER=${{ $orgUpper }}_CA_DB_USER
+      - POSTGRES_PASSWORD=${{ $orgUpper }}_CA_DB_PASSWORD
       - POSTGRES_DB=fabric_ca
     ports:
       - {{ $.BindAddress }}:{{ calculateDatabasePort $i 5432 }}:5432
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ca_admin -d fabric_ca"]
+      test: ["CMD-SHELL", "pg_isready -U ${{ $orgUpper }}_CA_DB_USER -d fabric_ca"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -46,11 +47,11 @@ services:
       - FABRIC_CA_SERVER_PORT=7054
       {{- if eq $.CADatabaseType "postgres" }}
       - FABRIC_CA_SERVER_DB_TYPE=postgres
-      - FABRIC_CA_SERVER_DB_DATASOURCE=host=db.ca.{{ $org.Domain }} port=5432 user=ca_admin password=ca_admin_pw dbname=fabric_ca sslmode=disable
+      - FABRIC_CA_SERVER_DB_DATASOURCE=host=db.ca.{{ $org.Domain }} port=5432 user=${{ $orgUpper }}_CA_DB_USER password=${{ $orgUpper }}_CA_DB_PASSWORD dbname=fabric_ca sslmode=disable
       {{- end }}
     ports:
       - {{ $.BindAddress }}:{{ calculateCAPort $i 7054 }}:7054
-    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
+    command: sh -c 'fabric-ca-server start -b ${{ $orgUpper }}_CA_ADMIN_USER:${{ $orgUpper }}_CA_ADMIN_PASSWORD -d'
     volumes:
       - ca.{{ $org.Domain }}:/etc/hyperledger/fabric-ca-server
       - ../identity-config/ca/fabric-ca-server-config.yaml:/etc/hyperledger/fabric-ca-server/fabric-ca-server-config.yaml

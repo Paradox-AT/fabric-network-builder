@@ -2,6 +2,7 @@ networks:
   test:
     name: fabric_test
 
+{{- $orgUpper := toUpper $.Org.Name }}
 services:
 {{- range $i, $e := until .Org.PeerCount }}
 {{- if eq (call $.PeerStateDatabase $i) "couchdb" }}
@@ -14,8 +15,8 @@ services:
       role: couchdb
       peer: peer{{$i}}.{{ $.Org.Domain }}
     environment:
-      - COUCHDB_USER=admin
-      - COUCHDB_PASSWORD=adminpw
+      - COUCHDB_USER=${{ $orgUpper }}_COUCHDB_USER
+      - COUCHDB_PASSWORD=${{ $orgUpper }}_COUCHDB_PASSWORD
     ports:
       - {{ $.BindAddress }}:{{ calculatePeerPort $.OrgIndex $i 5984 }}:5984
     healthcheck:
@@ -30,8 +31,8 @@ services:
     environment:
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
       - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb{{$i}}.{{ $.Org.Domain }}:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${{ $orgUpper }}_COUCHDB_USER
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${{ $orgUpper }}_COUCHDB_PASSWORD
     depends_on:
       - couchdb{{$i}}.{{ $.Org.Domain }}
 {{- end }}

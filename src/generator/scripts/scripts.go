@@ -12,6 +12,11 @@ import (
 	"network-builder/src/generator/utils"
 )
 
+// sensitiveFiles lists generated output files that must have restrictive permissions.
+var sensitiveFiles = map[string]bool{
+	".env": true,
+}
+
 //go:embed templates
 var templateFS embed.FS
 
@@ -47,14 +52,28 @@ func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string)
 	rootFiles := map[string]string{
 		"network.sh.tmpl":     "network.sh",
 		"network.config.tmpl": "network.config",
+		"env.tmpl":            ".env",
 	}
 
 	for tmplName, fileName := range rootFiles {
-		err := g.generateFile(cfg, tmplName, filepath.Join(outputDir, fileName))
+		destPath := filepath.Join(outputDir, fileName)
+		err := g.generateFile(cfg, tmplName, destPath)
 		if err != nil {
 			return err
 		}
+		// Apply restrictive permissions to sensitive files (e.g., .env)
+		if sensitiveFiles[fileName] {
+			if chmodErr := os.Chmod(destPath, 0600); chmodErr != nil {
+				fmt.Printf("Warning: failed to set permissions on %s: %v\n", destPath, chmodErr)
+			}
+		}
 	}
+
+	fmt.Println()
+	fmt.Println("⚠️  SECURITY REMINDER: The generated .env file contains WEAK DEFAULT credentials.")
+	fmt.Println("   Rotate ALL passwords before deploying to any shared or production environment.")
+	fmt.Println("   See the warning header inside network/.env for details.")
+	fmt.Println()
 
 	return nil
 }

@@ -17,7 +17,7 @@ Organizations:
     # ID to load the MSP definition as
     ID: {{ $orgMSPID }}
     # MSPDir is the filesystem path which contains the MSP configuration
-    MSPDir: ../organizations/{{ toLower $orgName }}/identities/{{ if gt .OrdererCount 0 }}orderer{{ else }}peer{{ end }}/msp
+    MSPDir: ../organizations/{{ toLower $orgName }}/identities/{{ if gt .PeerCount 0 }}peer{{ else }}orderer{{ end }}/msp
     # Policies defines the set of policies at this level of the config tree
     Policies:
       Readers:

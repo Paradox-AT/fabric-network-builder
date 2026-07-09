@@ -15,20 +15,25 @@ CC_COLL_CONFIG=${9:-"NA"}
 DELAY=${10:-"3"}
 MAX_RETRY=${11:-"5"}
 VERBOSE=${12:-"false"}
+SKIP_NET_CHECK=${13:-"false"}
+SKIP_CHANNEL_CHECK=${14:-"false"}
+SKIP_PACKAGING=${15:-"false"}
 
-println "executing with the following"
-println "- CHANNEL_NAME: ${C_GREEN}${CHANNEL_NAME}${C_RESET}"
-println "- CC_NAME: ${C_GREEN}${CC_NAME}${C_RESET}"
-println "- CC_SRC_PATH: ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
-println "- CC_SRC_LANGUAGE: ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
-println "- CC_VERSION: ${C_GREEN}${CC_VERSION}${C_RESET}"
-println "- CC_SEQUENCE: ${C_GREEN}${CC_SEQUENCE}${C_RESET}"
-println "- CC_END_POLICY: ${C_GREEN}${CC_END_POLICY}${C_RESET}"
-println "- CC_COLL_CONFIG: ${C_GREEN}${CC_COLL_CONFIG}${C_RESET}"
-println "- CC_INIT_FCN: ${C_GREEN}${CC_INIT_FCN}${C_RESET}"
-println "- DELAY: ${C_GREEN}${DELAY}${C_RESET}"
-println "- MAX_RETRY: ${C_GREEN}${MAX_RETRY}${C_RESET}"
-println "- VERBOSE: ${C_GREEN}${VERBOSE}${C_RESET}"
+if [ "${VERBOSE:-false}" = "true" ]; then
+  println "executing with the following"
+  println "- CHANNEL_NAME: ${C_GREEN}${CHANNEL_NAME}${C_RESET}"
+  println "- CC_NAME: ${C_GREEN}${CC_NAME}${C_RESET}"
+  println "- CC_SRC_PATH: ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
+  println "- CC_SRC_LANGUAGE: ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
+  println "- CC_VERSION: ${C_GREEN}${CC_VERSION}${C_RESET}"
+  println "- CC_SEQUENCE: ${C_GREEN}${CC_SEQUENCE}${C_RESET}"
+  println "- CC_END_POLICY: ${C_GREEN}${CC_END_POLICY}${C_RESET}"
+  println "- CC_COLL_CONFIG: ${C_GREEN}${CC_COLL_CONFIG}${C_RESET}"
+  println "- CC_INIT_FCN: ${C_GREEN}${CC_INIT_FCN}${C_RESET}"
+  println "- DELAY: ${C_GREEN}${DELAY}${C_RESET}"
+  println "- MAX_RETRY: ${C_GREEN}${MAX_RETRY}${C_RESET}"
+  println "- VERBOSE: ${C_GREEN}${VERBOSE}${C_RESET}"
+fi
 
 INIT_REQUIRED="--init-required"
 # check if the init fcn should be called
@@ -67,52 +72,58 @@ function checkPrereqs() {
   fi
 }
 
-#check for prerequisites
-checkPrereqs
+if [ "$SKIP_PACKAGING" != "true" ]; then
+  #check for prerequisites
+  checkPrereqs
+fi
 
 # Verify if the channel exists on peer0 of Org1 before proceeding
-setGlobals 1
-set +e
-CHANNEL_EXISTS=$(peer channel list 2>/dev/null | grep -x "${CHANNEL_NAME}")
-set -e
+if [ "$SKIP_CHANNEL_CHECK" != "true" ]; then
+  setGlobals 1
+  set +e
+  CHANNEL_EXISTS=$(peer channel list 2>/dev/null | grep -x "${CHANNEL_NAME}")
+  set -e
 
-if [ -z "${CHANNEL_EXISTS}" ]; then
-  warnln "Channel '${CHANNEL_NAME}' does not exist on peer0.org1."
-  if [ -t 0 ]; then
-    read -p "Would you like to automatically create and join channel '${CHANNEL_NAME}'? [y/N]: " answer
-    case "$answer" in
-      [yY][eE][sS]|[yY])
-        # Check if the network is running
-        running=$(docker ps --filter "label=service=hyperledger-fabric" --filter "status=running" -q)
-        if [ -z "$running" ]; then
-          warnln "Network is not running."
-          read -p "Would you like to automatically spin up the network? [y/N]: " net_answer
-          case "$net_answer" in
-            [yY][eE][sS]|[yY])
-              infoln "Starting network..."
-              ./network.sh up
-              ;;
-            *)
-              fatalln "Network is required to create channel. Exiting."
-              ;;
-          esac
-        fi
-        infoln "Creating channel '${CHANNEL_NAME}'..."
-        ./scripts/createChannel.sh "$CHANNEL_NAME" "$DELAY" "$MAX_RETRY" "$VERBOSE" 0
-        res=$?
-        verifyResult $res "Channel creation/join failed"
-        ;;
-      *)
-        fatalln "Channel '${CHANNEL_NAME}' is required to deploy chaincode. Exiting."
-        ;;
-    esac
-  else
-    fatalln "Non-interactive environment detected and channel '${CHANNEL_NAME}' does not exist. Exiting."
+  if [ -z "${CHANNEL_EXISTS}" ]; then
+    warnln "Channel '${CHANNEL_NAME}' does not exist on peer0.org1."
+    if [ -t 0 ]; then
+      read -p "Would you like to automatically create and join channel '${CHANNEL_NAME}'? [y/N]: " answer
+      case "$answer" in
+        [yY][eE][sS]|[yY])
+          # Check if the network is running
+          running=$(docker ps --filter "label=service=hyperledger-fabric" --filter "status=running" -q)
+          if [ -z "$running" ]; then
+            warnln "Network is not running."
+            read -p "Would you like to automatically spin up the network? [y/N]: " net_answer
+            case "$net_answer" in
+              [yY][eE][sS]|[yY])
+                infoln "Starting network..."
+                ./network.sh up
+                ;;
+              *)
+                fatalln "Network is required to create channel. Exiting."
+                ;;
+            esac
+          fi
+          infoln "Creating channel '${CHANNEL_NAME}'..."
+          ./scripts/createChannel.sh "$CHANNEL_NAME" "$DELAY" "$MAX_RETRY" "$VERBOSE" 0 "true" "true"
+          res=$?
+          verifyResult $res "Channel creation/join failed"
+          ;;
+        *)
+          fatalln "Channel '${CHANNEL_NAME}' is required to deploy chaincode. Exiting."
+          ;;
+      esac
+    else
+      fatalln "Non-interactive environment detected and channel '${CHANNEL_NAME}' does not exist. Exiting."
+    fi
   fi
 fi
 
-## package the chaincode (skips if already packaged)
-./scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION
+if [ "$SKIP_PACKAGING" != "true" ]; then
+  ## package the chaincode (skips if already packaged)
+  ./scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION
+fi
 
 PACKAGE_ID=$(peer lifecycle chaincode calculatepackageid ${ROOTDIR}/channel-artifacts/packagedChaincode/${CC_NAME}_${CC_VERSION}.tar.gz)
 infoln "PACKAGE_ID: ${PACKAGE_ID}"
