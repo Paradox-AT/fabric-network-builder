@@ -4,8 +4,8 @@ set -euo pipefail
 # This script bootstraps the Hyperledger Fabric binaries and docker images
 # based on the configuration selected in the Network Builder.
 
-ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
-. ${ROOTDIR}/network.config
+ROOTDIR=$(cd "$(dirname "$0")"/../ && pwd)
+. "${ROOTDIR}/network.config"
 
 # Detect OS and Architecture
 OS_NAME=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -94,8 +94,8 @@ download() {
 }
 
 # 1. Download and extract binaries
-BINARY_FILE="hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz"
-BINARY_URL="https://github.com/hyperledger/fabric/releases/download/v${FABRIC_VERSION}/${BINARY_FILE}"
+BINARY_FILE="${ROOTDIR}/hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz"
+BINARY_URL="https://github.com/hyperledger/fabric/releases/download/v${FABRIC_VERSION}/hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz"
 
 NEED_FABRIC=true
 if [ -f "${ROOTDIR}/bin/peer" ]; then
@@ -109,8 +109,40 @@ if [ -f "${ROOTDIR}/bin/peer" ]; then
 fi
 
 if [ "$NEED_FABRIC" == "true" ]; then
-  download "Fabric Binaries" "${BINARY_URL}" "${BINARY_FILE}"
-  tar -xzf "${BINARY_FILE}"
+  while true; do
+    download "Fabric Binaries" "${BINARY_URL}" "${BINARY_FILE}"
+    echo "==> Verifying SHA256 checksum for Fabric binaries via GitHub Releases API..."
+    DIGEST=$(curl -sL "https://api.github.com/repos/hyperledger/fabric/releases/tags/v${FABRIC_VERSION}" \
+      | jq -r --arg name "hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz" \
+        '.assets[] | select(.name == $name) | .digest' 2>/dev/null || true)
+
+    if [ -n "${DIGEST}" ] && [ "${DIGEST}" != "null" ]; then
+      EXPECTED_HASH=$(echo "${DIGEST}" | cut -d':' -f2)
+      ACTUAL_HASH=$(sha256sum "${BINARY_FILE}" | awk '{print $1}')
+      if [ "${EXPECTED_HASH}" != "${ACTUAL_HASH}" ]; then
+        echo "ERROR: SHA256 mismatch for Fabric binaries."
+        echo "  Expected: ${EXPECTED_HASH}"
+        echo "  Actual:   ${ACTUAL_HASH}"
+        rm -f "${BINARY_FILE}"
+        if [ -t 0 ]; then
+          read -p "SHA256 mismatch detected. Would you like to retry the download? [y/N]: " retry_choice
+          case "$retry_choice" in
+            [yY]|[yY][eE][sS])
+              echo "Retrying download..."
+              continue
+              ;;
+          esac
+        fi
+        exit 1
+      fi
+      echo "==> SHA256 checksum verified."
+    else
+      echo "WARNING: Could not retrieve checksum from GitHub API (might be rate-limited or offline)."
+      echo "         Skipping integrity verification."
+    fi
+    break
+  done
+  tar -C "${ROOTDIR}" -xzf "${BINARY_FILE}"
   rm "${BINARY_FILE}"
 fi
 
@@ -127,10 +159,42 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
   fi
 
   if [ "$NEED_CA" == "true" ]; then
-    CA_BINARY_FILE="hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz"
-    CA_BINARY_URL="https://github.com/hyperledger/fabric-ca/releases/download/v${CA_VERSION}/${CA_BINARY_FILE}"
-    download "Fabric CA Binaries" "${CA_BINARY_URL}" "${CA_BINARY_FILE}"
-    tar -xzf "${CA_BINARY_FILE}"
+    CA_BINARY_FILE="${ROOTDIR}/hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz"
+    CA_BINARY_URL="https://github.com/hyperledger/fabric-ca/releases/download/v${CA_VERSION}/hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz"
+    while true; do
+      download "Fabric CA Binaries" "${CA_BINARY_URL}" "${CA_BINARY_FILE}"
+      echo "==> Verifying SHA256 checksum for Fabric CA binaries via GitHub Releases API..."
+      DIGEST_CA=$(curl -sL "https://api.github.com/repos/hyperledger/fabric-ca/releases/tags/v${CA_VERSION}" \
+        | jq -r --arg name "hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz" \
+          '.assets[] | select(.name == $name) | .digest' 2>/dev/null || true)
+
+      if [ -n "${DIGEST_CA}" ] && [ "${DIGEST_CA}" != "null" ]; then
+        EXPECTED_HASH=$(echo "${DIGEST_CA}" | cut -d':' -f2)
+        ACTUAL_HASH=$(sha256sum "${CA_BINARY_FILE}" | awk '{print $1}')
+        if [ "${EXPECTED_HASH}" != "${ACTUAL_HASH}" ]; then
+          echo "ERROR: SHA256 mismatch for Fabric CA binaries."
+          echo "  Expected: ${EXPECTED_HASH}"
+          echo "  Actual:   ${ACTUAL_HASH}"
+          rm -f "${CA_BINARY_FILE}"
+          if [ -t 0 ]; then
+            read -p "SHA256 mismatch detected. Would you like to retry the download? [y/N]: " retry_choice
+            case "$retry_choice" in
+              [yY]|[yY][eE][sS])
+                echo "Retrying download..."
+                continue
+                ;;
+            esac
+          fi
+          exit 1
+        fi
+        echo "==> SHA256 checksum verified."
+      else
+        echo "WARNING: Could not retrieve CA checksum from GitHub API (might be rate-limited or offline)."
+        echo "         Skipping integrity verification."
+      fi
+      break
+    done
+    tar -C "${ROOTDIR}" -xzf "${CA_BINARY_FILE}"
     rm "${CA_BINARY_FILE}"
   fi
 fi

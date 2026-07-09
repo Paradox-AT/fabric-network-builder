@@ -29,7 +29,7 @@ function approveForMyOrg() {
   ORG=${1:-}
   setGlobals $ORG
   local ORG_NAME=$(getOrgName $ORG)
-  run_verbose peer lifecycle chaincode approveformyorg -o localhost:{{ calculateOrdererPort 0 0 7050 }} --tls --cafile "$ORDERER_CA" --channelID $CHANNEL_NAME --name ${CC_NAME} --version ${CC_VERSION} --package-id ${PACKAGE_ID} --sequence ${CC_SEQUENCE} ${INIT_REQUIRED} ${CC_END_POLICY} ${CC_COLL_CONFIG}
+  run_verbose peer lifecycle chaincode approveformyorg -o "${ORDERER_ADDRESS}" --tls --cafile "${ORDERER_CA}" --channelID "${CHANNEL_NAME}" --name "${CC_NAME}" --version "${CC_VERSION}" --package-id "${PACKAGE_ID}" --sequence "${CC_SEQUENCE}" ${INIT_REQUIRED} ${CC_END_POLICY} ${CC_COLL_CONFIG}
   verifyResult $? "Chaincode definition approved on ${ORG_NAME} peer0 on channel '$CHANNEL_NAME' failed"
   successln "Chaincode definition approved on ${ORG_NAME} on channel '$CHANNEL_NAME'"
 }
@@ -101,7 +101,7 @@ function commitChaincodeDefinition() {
   # while 'peer chaincode' command can get the orderer endpoint from the
   # peer (if join was successful), let's supply it directly as we know
   # it using the "-o" option
-  run_verbose peer lifecycle chaincode commit -o localhost:{{ calculateOrdererPort 0 0 7050 }} --tls --cafile "$ORDERER_CA" --channelID $CHANNEL_NAME --name ${CC_NAME} "${PEER_CONN_PARMS[@]}" --version ${CC_VERSION} --sequence ${CC_SEQUENCE} ${INIT_REQUIRED} ${CC_END_POLICY} ${CC_COLL_CONFIG}
+  run_verbose peer lifecycle chaincode commit -o "${ORDERER_ADDRESS}" --tls --cafile "${ORDERER_CA}" --channelID "${CHANNEL_NAME}" --name "${CC_NAME}" "${PEER_CONN_PARMS[@]}" --version "${CC_VERSION}" --sequence "${CC_SEQUENCE}" ${INIT_REQUIRED} ${CC_END_POLICY} ${CC_COLL_CONFIG}
   verifyResult $? "Chaincode definition commit failed on peer0.org${ORG} on channel '$CHANNEL_NAME' failed"
   successln "Chaincode definition committed on channel '$CHANNEL_NAME'"
 }

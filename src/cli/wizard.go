@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -29,9 +30,9 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 	} else {
 		cfg = &config.NetworkConfig{
 			NetworkName:      "fabric-network",
-			FabricVersion:    "3.1.4",
+			FabricVersion:    "3.1.5",
 			CAVersion:        "1.5.19",
-			CouchDBVersion:   "3.5.1",
+			CouchDBVersion:   "3.5.2",
 			CADatabaseType:   "sqlite",
 			PostgresVersion:  "16.2",
 			OrdererType:      "etcdraft",
@@ -55,6 +56,10 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 					Validate(func(s string) error {
 						if strings.TrimSpace(s) == "" {
 							return errors.New("required")
+						}
+						matched, _ := regexp.MatchString("^[a-z0-9][a-z0-9_-]*$", s)
+						if !matched {
+							return errors.New("must be lowercase alphanumeric, hyphens, or underscores, starting with a letter or digit")
 						}
 						return nil
 					}),

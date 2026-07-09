@@ -4,7 +4,7 @@
 FABRIC_VERSION="{{ .FabricVersion }}"
 
 # Docker Compose Project Name
-COMPOSE_PROJECT_NAME="{{ .NetworkName }}"
+COMPOSE_PROJECT_NAME="{{ toLower .NetworkName }}"
 
 # Fabric CA Version
 CA_VERSION="{{ .CAVersion }}"

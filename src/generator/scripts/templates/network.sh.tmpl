@@ -51,6 +51,14 @@ export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
 function clearContainers() {
   infoln "Removing remaining containers for project: ${COMPOSE_PROJECT_NAME}"
   docker rm -f $(docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}") 2>/dev/null || true
+  infoln "Removing leftover chaincode containers"
+  docker rm -f $(docker ps -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
+}
+
+# Delete chaincode docker images
+function removeChaincodeImages() {
+  infoln "Removing leftover chaincode images"
+  docker rmi -f $(docker images -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
 }
 
 function bootstrap() {
@@ -88,9 +96,30 @@ function checkBinaries() {
     fi
   done
 
+  # Check if busybox image is available locally in Docker (used for file cleanup on network down)
+  if command -v docker >/dev/null 2>&1; then
+    if ! docker image inspect busybox >/dev/null 2>&1; then
+      warnln "Docker image 'busybox' not found locally"
+      missing=true
+    fi
+  fi
+
   if [ "$missing" = true ]; then
-    infoln "One or more binaries or config files are missing. Running bootstrap..."
-    bootstrap
+    if [ -t 0 ]; then
+      read -p "One or more binaries or config files are missing. Would you like to run bootstrap to download them? [y/N]: " answer
+      case "$answer" in
+        [yY]|[yY][eE][sS])
+          infoln "Running bootstrap..."
+          bootstrap
+          ;;
+        *)
+          fatalln "Aborting: Cannot start network without required binaries/configs."
+          ;;
+      esac
+    else
+      infoln "One or more binaries or config files are missing. Running bootstrap (non-interactive)..."
+      bootstrap
+    fi
   else
     # 2. Check for version mismatches
     local version_mismatch=false
@@ -351,6 +380,7 @@ function networkDown() {
   if [ "$MODE" != "restart" ]; then
     # Bring down the network, deleting the volumes
     clearContainers
+    removeChaincodeImages
 
     infoln "Removing generated identities and artifacts"
 

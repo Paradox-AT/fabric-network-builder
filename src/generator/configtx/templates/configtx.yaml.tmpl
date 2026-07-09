@@ -200,7 +200,7 @@ Orderer: &OrdererDefaults
     # from the orderer for the peer to validate it.
     BlockValidation:
       Type: ImplicitMeta
-      Rule: "ANY Writers"
+      Rule: "MAJORITY Writers"
   Capabilities:
     <<: *OrdererCapabilities
 

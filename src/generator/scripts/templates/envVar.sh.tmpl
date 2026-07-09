@@ -8,13 +8,8 @@ TEST_NETWORK_HOME=${TEST_NETWORK_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. 
 
 export CORE_PEER_TLS_ENABLED=true
 
-# Get orderer CA
-{{- range $i, $org := .Orgs }}
-  {{- if gt .OrdererCount 0 }}
-export ORDERER_CA=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/orderer/tlsca/tlsca.{{ .Domain }}-cert.pem
-    {{- break }}
-  {{- end }}
-{{- end }}
+# ORDERER_CA and ORDERER_ADDRESS are now set per-org inside setGlobals()
+# so that every operation uses the correct orderer for the calling org.
 
 # Set environment variables for the peer org
 setGlobals() {
@@ -30,7 +25,7 @@ setGlobals() {
   else
     USING_PEER=$2
   fi
-  if [ "${VERBOSE:-false}" = "true" ]; then infoln "Using organization ${USING_ORG} (Peer ${USING_PEER})"; fi
+  # Calculate peer address and credentials based on org + peer index
   {{- $firstOrg := true }}
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
@@ -38,12 +33,22 @@ setGlobals() {
     export CORE_PEER_LOCALMSPID={{ .MSPID }}
     export CORE_PEER_TLS_ROOTCERT_FILE=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peer/tlsca/tlsca.{{ .Domain }}-cert.pem
     export CORE_PEER_MSPCONFIGPATH=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/peer/users/Admin@{{ .Domain }}/msp
-    
     # Calculate address based on peer index
     {{ range $j, $p := until .PeerCount }}
     if [ $USING_PEER -eq {{ $j }} ]; then
       export CORE_PEER_ADDRESS=localhost:{{ calculatePeerPort $i $j 7051 }}
     fi
+    {{- end }}
+    # Set orderer address and CA for this org's orderer
+    {{- $hasOrderer := false }}
+    {{- range $oi, $oorg := $.Orgs }}
+      {{- if gt .OrdererCount 0 }}
+        {{- if not $hasOrderer }}
+    export ORDERER_ADDRESS=localhost:{{ calculateOrdererPort $oi 0 7050 }}
+    export ORDERER_CA=${TEST_NETWORK_HOME}/organizations/{{ toLower .Name }}/identities/orderer/tlsca/tlsca.{{ .Domain }}-cert.pem
+          {{- $hasOrderer = true }}
+        {{- end }}
+      {{- end }}
     {{- end }}
     {{- $firstOrg = false }}
   {{- end }}
