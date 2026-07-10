@@ -93,7 +93,7 @@ func main() {
 
 	fmt.Println("\n=== Generating Network Artifacts ===")
 
-	cleanArtifacts(outputDir)
+	// cleanArtifacts(outputDir)
 
 	for _, gen := range generators {
 		err := gen.Generate(cfg, outputDir)

@@ -91,7 +91,7 @@ if [ "$SKIP_CHANNEL_CHECK" != "true" ]; then
       case "$answer" in
         [yY][eE][sS]|[yY])
           # Check if the network is running
-          running=$(docker ps --filter "label=service=hyperledger-fabric" --filter "status=running" -q)
+          running=$("${CONTAINER_CLI}" ps --filter "label=service=hyperledger-fabric" --filter "status=running" -q)
           if [ -z "$running" ]; then
             warnln "Network is not running."
             read -p "Would you like to automatically spin up the network? [y/N]: " net_answer

@@ -47,20 +47,17 @@ function verifyResult() {
   fi
 }
 
-if docker compose version >/dev/null 2>&1; then
-  function docker_compose() {
-    docker compose "$@"
-  }
-elif docker-compose version >/dev/null 2>&1; then
-  function docker_compose() {
-    docker-compose "$@"
-  }
+export CONTAINER_CLI=${CONTAINER_CLI:-docker}
+if command -v ${CONTAINER_CLI}-compose >/dev/null 2>&1; then
+  export CONTAINER_CLI_COMPOSE="${CONTAINER_CLI}-compose"
 else
-  function docker_compose() {
-    fatalln "Neither 'docker compose' nor 'docker-compose' command found. Please install Docker Compose."
-  }
+  export CONTAINER_CLI_COMPOSE="${CONTAINER_CLI} compose"
 fi
-export -f docker_compose
+
+function container_compose() {
+  ${CONTAINER_CLI_COMPOSE} "$@"
+}
+export -f container_compose
 
 function debug_on() {
   if [ "${VERBOSE:-false}" = "true" ]; then
@@ -75,10 +72,14 @@ function debug_off() {
 }
 
 function run_verbose() {
+  local log_file="log.txt"
   if [ "${VERBOSE:-false}" = "true" ]; then
-    "$@"
+    set +e
+    "$@" 2>&1 | tee "${log_file}"
+    local res=${PIPESTATUS[0]}
+    set -e
+    return $res
   else
-    local log_file="log.txt"
     set +e
     "$@" &>"${log_file}"
     local res=$?
@@ -89,6 +90,22 @@ function run_verbose() {
     return $res
   fi
 }
+
+# Error handler trap to print logs of the last command if it fails
+function check_exit_status() {
+  local exit_status=$?
+  if [ $exit_status -ne 0 ]; then
+    errorln "Script failed with status ${exit_status}."
+    if [ -f "log.txt" ]; then
+      errorln "Last log messages (log.txt):"
+      cat "log.txt"
+    elif [ -f "../log.txt" ]; then
+      errorln "Last log messages (log.txt):"
+      cat "../log.txt"
+    fi
+  fi
+}
+trap check_exit_status EXIT
 
 export -f debug_on
 export -f debug_off

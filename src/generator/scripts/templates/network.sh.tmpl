@@ -7,18 +7,22 @@ ROOTDIR=$(cd "$(dirname "$0")" && pwd)
 export PATH="${ROOTDIR}/bin:${PATH}"
 export VERBOSE=false
 export PROMPT_ALWAYS=false
+export START_UTILITIES=false
 
-# Global verbose flag parsing: scan all arguments for -v or --verbose
+# Global flag parsing: scan all arguments for verbose and utility options
 for arg in "$@"; do
   if [ "$arg" = "-v" ] || [ "$arg" = "--verbose" ]; then
     export VERBOSE=true
   fi
+  if [ "$arg" = "-u" ] || [ "$arg" = "--utility" ]; then
+    export START_UTILITIES=true
+  fi
 done
 
-# Strip -v / --verbose from positional arguments list
+# Strip parsed flags from positional arguments list
 NEW_ARGS=()
 for arg in "$@"; do
-  if [ "$arg" != "-v" ] && [ "$arg" != "--verbose" ]; then
+  if [ "$arg" != "-v" ] && [ "$arg" != "--verbose" ] && [ "$arg" != "-u" ] && [ "$arg" != "--utility" ]; then
     NEW_ARGS+=("$arg")
   fi
 done
@@ -43,6 +47,7 @@ fi
 
 COMPOSE_FILE_BASE=${ROOTDIR}/compose/docker-compose.yaml
 COMPOSE_FILE_CA=${ROOTDIR}/compose/compose-cas.yaml
+COMPOSE_FILE_UTILS=${ROOTDIR}/compose/compose-utils.yaml
 
 # Export COMPOSE_PROJECT_NAME to scope all docker-compose operations
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
@@ -50,15 +55,15 @@ export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
 # Obtain CONTAINER_IDS and remove them
 function clearContainers() {
   infoln "Removing remaining containers for project: ${COMPOSE_PROJECT_NAME}"
-  docker rm -f $(docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}") 2>/dev/null || true
+  "${CONTAINER_CLI}" rm -f $("${CONTAINER_CLI}" ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}") 2>/dev/null || true
   infoln "Removing leftover chaincode containers"
-  docker rm -f $(docker ps -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
+  "${CONTAINER_CLI}" rm -f $("${CONTAINER_CLI}" ps -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
 }
 
 # Delete chaincode docker images
 function removeChaincodeImages() {
   infoln "Removing leftover chaincode images"
-  docker rmi -f $(docker images -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
+  "${CONTAINER_CLI}" rmi -f $("${CONTAINER_CLI}" images -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
 }
 
 function bootstrap() {
@@ -88,7 +93,7 @@ function checkBinaries() {
   fi
 
   # Check host system dependencies required at runtime
-  local HOST_DEPS="docker jq curl tar"
+  local HOST_DEPS="${CONTAINER_CLI} jq curl tar"
   for dep in ${HOST_DEPS}; do
     if ! command -v "${dep}" > /dev/null 2>&1; then
       warnln "Required host tool '${dep}' not found. Install it and retry."
@@ -96,10 +101,10 @@ function checkBinaries() {
     fi
   done
 
-  # Check if busybox image is available locally in Docker (used for file cleanup on network down)
-  if command -v docker >/dev/null 2>&1; then
-    if ! docker image inspect busybox >/dev/null 2>&1; then
-      warnln "Docker image 'busybox' not found locally"
+  # Check if busybox image is available locally (used for file cleanup on network down)
+  if command -v "${CONTAINER_CLI}" >/dev/null 2>&1; then
+    if ! "${CONTAINER_CLI}" image inspect busybox >/dev/null 2>&1; then
+      warnln "Container image 'busybox' not found locally"
       missing=true
     fi
   fi
@@ -169,14 +174,37 @@ function networkUp() {
   fi
 
   if [ "${VERBOSE:-false}" = "true" ]; then
-    docker_compose -f "${COMPOSE_FILE_BASE}" up -d
-    docker ps -a
+    container_compose -f "${COMPOSE_FILE_BASE}" up -d 2>&1 | tee log.txt
+    res=${PIPESTATUS[0]}
+    if [ $res -ne 0 ]; then
+      fatalln "Unable to start network"
+    fi
+    "${CONTAINER_CLI}" ps -a
   else
-    docker_compose -f "${COMPOSE_FILE_BASE}" up -d >&log.txt
+    container_compose -f "${COMPOSE_FILE_BASE}" up -d >&log.txt
     res=$?
     if [ $res -ne 0 ]; then
       cat log.txt
       fatalln "Unable to start network"
+    fi
+  fi
+
+  # Start utility services (pgAdmin) if the config exists and -u/--utility is passed
+  if [ -f "${COMPOSE_FILE_UTILS}" ] && [ "${START_UTILITIES}" = "true" ]; then
+    infoln "Starting utility services (pgAdmin)"
+    if [ "${VERBOSE:-false}" = "true" ]; then
+      container_compose -f "${COMPOSE_FILE_UTILS}" up -d 2>&1 | tee -a log.txt
+      res=${PIPESTATUS[0]}
+      if [ $res -ne 0 ]; then
+        fatalln "Unable to start utility services"
+      fi
+    else
+      container_compose -f "${COMPOSE_FILE_UTILS}" up -d >>log.txt 2>&1
+      res=$?
+      if [ $res -ne 0 ]; then
+        cat log.txt
+        fatalln "Unable to start utility services"
+      fi
     fi
   fi
 }
@@ -186,9 +214,13 @@ function generateCerts() {
     infoln "Generating certificates using Fabric CA"
 
     if [ "${VERBOSE:-false}" = "true" ]; then
-      docker_compose -f "${COMPOSE_FILE_CA}" up -d
+      container_compose -f "${COMPOSE_FILE_CA}" up -d 2>&1 | tee log.txt
+      res=${PIPESTATUS[0]}
+      if [ $res -ne 0 ]; then
+        fatalln "Unable to start Fabric CA"
+      fi
     else
-      docker_compose -f "${COMPOSE_FILE_CA}" up -d >&log.txt
+      container_compose -f "${COMPOSE_FILE_CA}" up -d >&log.txt
       res=$?
       if [ $res -ne 0 ]; then
         cat log.txt
@@ -205,7 +237,7 @@ function generateCerts() {
     # Fetch the CA cert from the container. It might take a second to generate at first boot.
     COUNTER=0
     while [ $COUNTER -lt 10 ]; do
-      docker cp ca.{{ .Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" >/dev/null 2>&1 && break
+      "${CONTAINER_CLI}" cp ca.{{ .Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" >/dev/null 2>&1 && break
       sleep 1
       COUNTER=$((COUNTER + 1))
     done
@@ -271,7 +303,7 @@ function createChannel() {
     checkBinaries
 
     # 1. Check if the network is running
-    running=$(docker_compose -f "${COMPOSE_FILE_BASE}" ps --status running -q 2>/dev/null)
+    running=$(container_compose -f "${COMPOSE_FILE_BASE}" ps --status running -q 2>/dev/null)
     if [ -z "$running" ]; then
       warnln "Network is not running."
       if [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
@@ -366,14 +398,20 @@ function createChannel() {
 function networkDown() {
   infoln "Stopping network"
   if [ "${VERBOSE:-false}" = "true" ]; then
-    docker_compose -f "${COMPOSE_FILE_BASE}" down --volumes --remove-orphans
+    container_compose -f "${COMPOSE_FILE_BASE}" down --volumes --remove-orphans
     if [ "${CRYPTO}" == "Fabric CA" ]; then
-      docker_compose -f "${COMPOSE_FILE_CA}" down --volumes --remove-orphans
+      container_compose -f "${COMPOSE_FILE_CA}" down --volumes --remove-orphans
+    fi
+    if [ -f "${COMPOSE_FILE_UTILS}" ]; then
+      container_compose -f "${COMPOSE_FILE_UTILS}" down --volumes --remove-orphans
     fi
   else
-    docker_compose -f "${COMPOSE_FILE_BASE}" down --volumes --remove-orphans >/dev/null 2>&1
+    container_compose -f "${COMPOSE_FILE_BASE}" down --volumes --remove-orphans >/dev/null 2>&1
     if [ "${CRYPTO}" == "Fabric CA" ]; then
-      docker_compose -f "${COMPOSE_FILE_CA}" down --volumes --remove-orphans >/dev/null 2>&1
+      container_compose -f "${COMPOSE_FILE_CA}" down --volumes --remove-orphans >/dev/null 2>&1
+    fi
+    if [ -f "${COMPOSE_FILE_UTILS}" ]; then
+      container_compose -f "${COMPOSE_FILE_UTILS}" down --volumes --remove-orphans >/dev/null 2>&1
     fi
   fi
 
@@ -389,7 +427,7 @@ function networkDown() {
 
     # Remove organization identities and CA runtime data
     # We use a container to clean up to avoid permission issues with files created by Docker
-    docker run --rm -v ${ROOTDIR}:/data busybox sh -c "
+    "${CONTAINER_CLI}" run --rm -v ${ROOTDIR}:/data busybox sh -c "
       cd /data && \
       {{- range .Orgs }}
       rm -rf organizations/{{ toLower .Name }}/identities && \
@@ -407,7 +445,7 @@ function networkDown() {
 
 function deployCC() {
   # 1. Check if the network is running
-  running=$(docker_compose -f "${COMPOSE_FILE_BASE}" ps --status running -q 2>/dev/null)
+  running=$(container_compose -f "${COMPOSE_FILE_BASE}" ps --status running -q 2>/dev/null)
   if [ -z "$running" ]; then
     warnln "Network is not running."
     if [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
@@ -644,6 +682,78 @@ function deployCC() {
   fi
 }
 
+# Helper to resolve organization string to integer index
+function getOrgIndex() {
+  local input="${1:-1}"
+  # Check if numeric
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    echo "$input"
+    return
+  fi
+  local name=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+  {{- range $i, $org := .Orgs }}
+  if [ "$name" = "{{ toLower .Name }}" ] || [ "$name" = "org{{ inc $i }}" ] || [ "$name" = "{{ toLower .Domain }}" ]; then
+    echo "{{ inc $i }}"
+    return
+  fi
+  {{- end }}
+  echo "1"
+}
+
+function listChaincode() {
+  export FABRIC_CFG_PATH="${ROOTDIR}/config"
+  . "${ROOTDIR}/scripts/envVar.sh"
+  . "${ROOTDIR}/scripts/ccutils.sh"
+
+  local org_idx=$(getOrgIndex "$ORG")
+  setGlobals "$org_idx"
+  
+  println "Installed chaincodes on peer0.org${org_idx}:"
+  queryInstalledOnPeer
+  println
+  println "Committed chaincodes:"
+  listAllCommitted
+}
+
+function invokeChaincode() {
+  export FABRIC_CFG_PATH="${ROOTDIR}/config"
+  . "${ROOTDIR}/scripts/envVar.sh"
+  . "${ROOTDIR}/scripts/ccutils.sh"
+
+  local org_idx=$(getOrgIndex "$ORG")
+  setGlobals "$org_idx"
+
+  # Construct connection params for all orgs that have peers
+  local orgs=()
+  {{- range $i, $org := .Orgs }}
+    {{- if gt .PeerCount 0 }}
+  orgs+=("{{ inc $i }}")
+    {{- end }}
+  {{- end }}
+
+  parsePeerConnectionParameters "${orgs[@]}"
+  chaincodeInvoke "$org_idx" "$CHANNEL_NAME" "$CC_NAME" "$CC_INVOKE_CONSTRUCTOR"
+}
+
+function queryChaincode() {
+  export FABRIC_CFG_PATH="${ROOTDIR}/config"
+  . "${ROOTDIR}/scripts/envVar.sh"
+  . "${ROOTDIR}/scripts/ccutils.sh"
+
+  local org_idx=$(getOrgIndex "$ORG")
+  setGlobals "$org_idx"
+
+  chaincodeQuery "$org_idx" "$CHANNEL_NAME" "$CC_NAME" "$CC_QUERY_CONSTRUCTOR"
+}
+
+function packageChaincode() {
+  export FABRIC_CFG_PATH="${ROOTDIR}/config"
+  . "${ROOTDIR}/scripts/envVar.sh"
+  
+  infoln "Packaging chaincode: ${CC_NAME} (version: ${CC_VERSION})"
+  ${ROOTDIR}/scripts/packageCC.sh "$CC_NAME" "$CC_SRC_PATH" "$CC_SRC_LANGUAGE" "$CC_VERSION" "true"
+}
+
 MODE=${1:-""}
 if [ $# -gt 0 ]; then shift; fi
 
@@ -716,6 +826,108 @@ elif [ "$MODE" == "deployCC" ]; then
     fatalln "Please provide the chaincode source path using -ccp flag"
   fi
   deployCC
+elif [ "$MODE" == "cc" ]; then
+  SUBCOMMAND=${1:-""}
+  if [ $# -gt 0 ]; then shift; fi
+
+  if [ -z "$SUBCOMMAND" ]; then
+    println "Usage: network.sh cc [package|list|invoke|query] [flags]"
+    exit 1
+  fi
+
+  CHANNEL_NAME="mychannel"
+  CC_NAME="basic"
+  CC_SRC_PATH="NA"
+  CC_SRC_LANGUAGE="go"
+  CC_VERSION="1.0"
+  CC_SEQUENCE="auto"
+  CC_INIT_FCN="NA"
+  CC_END_POLICY="NA"
+  CC_COLL_CONFIG="NA"
+  CC_INVOKE_CONSTRUCTOR=""
+  CC_QUERY_CONSTRUCTOR=""
+  ORG="1"
+
+  while [[ $# -ge 1 ]] ; do
+    key="$1"
+    case $key in
+    -c )
+      CHANNEL_NAME="${2:-}"
+      shift
+      ;;
+    -ccn )
+      CC_NAME="${2:-}"
+      shift
+      ;;
+    -ccp )
+      CC_SRC_PATH="${2:-}"
+      shift
+      ;;
+    -ccl )
+      CC_SRC_LANGUAGE="${2:-}"
+      shift
+      ;;
+    -ccv )
+      CC_VERSION="${2:-}"
+      shift
+      ;;
+    -ccs )
+      CC_SEQUENCE="${2:-}"
+      shift
+      ;;
+    -cci )
+      CC_INIT_FCN="${2:-}"
+      shift
+      ;;
+    -ccep )
+      CC_END_POLICY="${2:-}"
+      shift
+      ;;
+    -cccg )
+      CC_COLL_CONFIG="${2:-}"
+      shift
+      ;;
+    -ccic )
+      CC_INVOKE_CONSTRUCTOR="${2:-}"
+      shift
+      ;;
+    -ccqc )
+      CC_QUERY_CONSTRUCTOR="${2:-}"
+      shift
+      ;;
+    -org )
+      ORG="${2:-}"
+      shift
+      ;;
+    * )
+      errorln "Unknown flag: $key"
+      exit 1
+      ;;
+    esac
+    shift
+  done
+
+  if [ "$SUBCOMMAND" == "list" ]; then
+    listChaincode
+  elif [ "$SUBCOMMAND" == "invoke" ]; then
+    if [ -z "$CC_INVOKE_CONSTRUCTOR" ]; then
+      fatalln "Please specify invoke constructor using -ccic flag"
+    fi
+    invokeChaincode
+  elif [ "$SUBCOMMAND" == "query" ]; then
+    if [ -z "$CC_QUERY_CONSTRUCTOR" ]; then
+      fatalln "Please specify query constructor using -ccqc flag"
+    fi
+    queryChaincode
+  elif [ "$SUBCOMMAND" == "package" ]; then
+    if [ "$CC_SRC_PATH" == "NA" ]; then
+      fatalln "Please provide the chaincode source path using -ccp flag"
+    fi
+    packageChaincode
+  else
+    println "Unknown cc subcommand: $SUBCOMMAND"
+    exit 1
+  fi
 elif [ "$MODE" == "down" ]; then
   networkDown
 else
@@ -724,6 +936,7 @@ else
   println "  network.sh up"
   println "  network.sh createChannel <channel_name>"
   println "  network.sh deployCC -ccn <name> -ccp <path> -ccl <language>"
+  println "  network.sh cc [package|list|invoke|query] [flags]"
   println "  network.sh down"
   exit 1
 fi

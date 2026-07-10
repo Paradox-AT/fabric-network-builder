@@ -1,7 +1,8 @@
 # Hyperledger Fabric Network Builder 🚀
 
-[![Fabric Version](https://img.shields.io/badge/Fabric-3.1.5-blue.svg)](https://hyperledger-fabric.readthedocs.io/)
-[![Fabric CA](https://img.shields.io/badge/Fabric%20CA-1.5.19-green.svg)](https://hyperledger-fabric-ca.readthedocs.io/)
+[![Hyperledger Fabric Version](https://img.shields.io/badge/Fabric-3.1.5-blue.svg)](https://hyperledger-fabric.readthedocs.io/)
+[![Hyperledger Fabric CA](https://img.shields.io/badge/Fabric%20CA-1.5.19-green.svg)](https://hyperledger-fabric-ca.readthedocs.io/)
+[![CouchDB Version](https://img.shields.io/badge/CouchDB-3.5.2-red.svg)](https://couchdb.apache.org/)
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8.svg)](https://go.dev/)
 
 A production-grade, organization-centric CLI wizard for architecting and deploying Hyperledger Fabric 3.1.5 networks. This tool automates the entire lifecycle from identity issuance to channel creation.
@@ -62,7 +63,7 @@ network/
 
 | Command | Description |
 | :--- | :--- |
-| `./network.sh up` | Generates identities and starts all network components. |
+| `./network.sh up [-u]` | Generates identities and starts all network components. Pass `-u` or `--utility` to also start utility services like pgAdmin. |
 | `./network.sh down` | Stops containers and removes runtime artifacts. |
 | `./network.sh restart` | Quickly bounces the network while preserving volumes. |
 | `./network.sh createChannel <channel_name>` | Automates the genesis-to-join flow for a channel. |

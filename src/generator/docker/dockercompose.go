@@ -73,6 +73,14 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 	if err != nil {
 		return fmt.Errorf("failed to parse hub-cas template: %w", err)
 	}
+	utilsTmpl, err := template.New("compose-utils.yaml.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/compose-utils.yaml.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse compose-utils template: %w", err)
+	}
+	serversTmpl, err := template.New("pgadmin-servers.json.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/pgadmin-servers.json.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse servers template: %w", err)
+	}
 
 	// 2. Generate Organizational Compose Files
 	for i, org := range cfg.Orgs {
@@ -223,6 +231,39 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 			return fmt.Errorf("failed to write compose/compose-cas.yaml: %w", err)
 		}
 		fmt.Printf("Generated %s\n", filepath.Join(hubDir, "compose-cas.yaml"))
+	}
+
+	// Generate compose/compose-utils.yaml and config/servers.json if using Postgres
+	if cfg.CADatabaseType == "postgres" && cfg.CryptoStrategy == "Fabric CA" {
+		configDir := filepath.Join(outputDir, "config")
+		err = os.MkdirAll(configDir, 0755)
+		if err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
+
+		var serversBuf bytes.Buffer
+		err = serversTmpl.Execute(&serversBuf, cfg)
+		if err != nil {
+			return fmt.Errorf("failed to execute servers template: %w", err)
+		}
+		serversPath := filepath.Join(configDir, "pgadmin-servers.json")
+		err = os.WriteFile(serversPath, serversBuf.Bytes(), 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write config/pgadmin-servers.json: %w", err)
+		}
+		fmt.Printf("Generated %s\n", serversPath)
+
+		var utilsBuf bytes.Buffer
+		err = utilsTmpl.Execute(&utilsBuf, cfg)
+		if err != nil {
+			return fmt.Errorf("failed to execute compose-utils template: %w", err)
+		}
+		utilsPath := filepath.Join(hubDir, "compose-utils.yaml")
+		err = os.WriteFile(utilsPath, utilsBuf.Bytes(), 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write compose/compose-utils.yaml: %w", err)
+		}
+		fmt.Printf("Generated %s\n", utilsPath)
 	}
 
 	return nil

@@ -1,0 +1,16 @@
+{
+  "Servers": {
+    {{- range $i, $org := .Orgs }}
+    "{{ inc $i }}": {
+      "Name": "{{ $org.Name }} CA Database",
+      "Group": "Fabric CA Databases",
+      "Host": "db.ca.{{ $org.Domain }}",
+      "Port": 5432,
+      "MaintenanceDB": "fabric_ca",
+      "Username": "ca_admin",
+      "SSLMode": "disable",
+      "Password": "ca_admin_pw"
+    }{{- if lt (inc $i) (len $.Orgs) }},{{- end }}
+    {{- end }}
+  }
+}

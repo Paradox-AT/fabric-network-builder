@@ -64,5 +64,6 @@ services:
       - test
     {{- if eq $.CADatabaseType "postgres" }}
     depends_on:
-      - db.ca.{{ $org.Domain }}
+      db.ca.{{ $org.Domain }}:
+        condition: service_healthy
     {{- end }}

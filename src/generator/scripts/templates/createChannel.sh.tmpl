@@ -27,7 +27,7 @@ fi
 if [ "$SKIP_NET_CHECK" != "true" ]; then
 	# 1. Check if the network is up and running
 	infoln "Checking if the network is up and running..."
-	if [ -z "$(docker_compose -f ${ROOTDIR}/compose/docker-compose.yaml ps --status running -q 2>/dev/null)" ]; then
+	if [ -z "$(container_compose -f ${ROOTDIR}/compose/docker-compose.yaml ps --status running -q 2>/dev/null)" ]; then
 		fatalln "The Fabric network is not running. Please start the network first using './network.sh up'."
 	fi
 fi
