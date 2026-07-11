@@ -7,20 +7,49 @@ if [ -z "${ROOTDIR:-}" ]; then
 fi
 . ${ROOTDIR}/scripts/utils.sh
 
+# Ensure the generated binaries folder is in the path
+export PATH="${ROOTDIR}/bin:${PATH}"
+
 if [ -f "${ROOTDIR}/.env" ]; then
   . "${ROOTDIR}/.env"
 fi
 
 {{- $orgUpper := toUpper .Org.Name }}
 
+function register_identity() {
+  local id_name="$1"
+  local id_secret="$2"
+  local id_type="$3"
+  local ca_name="$4"
+  local cert_file="$5"
+
+  infoln "Registering ${id_name} (${id_type}) for {{ .Org.Name }}..."
+  
+  set +e
+  local reg_output
+  reg_output=$(fabric-ca-client register --caname "${ca_name}" --id.name "${id_name}" --id.secret "${id_secret}" --id.type "${id_type}" --tls.certfiles "${cert_file}" 2>&1)
+  local reg_rc=$?
+  set -e
+
+  if [ $reg_rc -ne 0 ]; then
+    if [[ "${reg_output}" =~ "already registered" ]]; then
+      warnln "Identity '${id_name}' is already registered on ${ca_name}."
+    else
+      errorln "Failed to register ${id_name}: ${reg_output}"
+      exit 1
+    fi
+  else
+    successln "Successfully registered ${id_name}"
+  fi
+}
+
 function createOrg{{ add .OrgIndex 1 }}() {
   infoln "Enrolling the CA admin for {{ .Org.Name }}"
   
-  # Fetch CA certificate from container since it's now in a Docker volume
   LOCAL_CA_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/ca"
   mkdir -p "${LOCAL_CA_DIR}"
   infoln "Fetching CA certificate from container ca.{{ .Org.Domain }}..."
-  run_verbose docker cp ca.{{ .Org.Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${LOCAL_CA_DIR}/ca-cert.pem"
+  run_verbose "${CONTAINER_CLI}" cp ca.{{ .Org.Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${LOCAL_CA_DIR}/ca-cert.pem"
   
   # For peers
   {{ if gt .Org.PeerCount 0 }}
@@ -56,21 +85,11 @@ function createOrg{{ add .OrgIndex 1 }}() {
   cp "${LOCAL_CA_DIR}/ca-cert.pem" "${ORG_DIR}/ca/ca.{{ .Org.Domain }}-cert.pem"
 
   {{ range $j, $peer := until .Org.PeerCount }}
-  infoln "Registering peer{{ $j }} for {{ $.Org.Name }}"
-  debug_on
-  run_verbose fabric-ca-client register --caname {{ $.Org.CAName }} --id.name peer{{ $j }} --id.secret peer{{ $j }}pw --id.type peer --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
-  debug_off
+  register_identity "peer{{ $j }}" "peer{{ $j }}pw" "peer" "{{ $.Org.CAName }}" "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
   {{ end }}
 
-  infoln "Registering user for {{ .Org.Name }}"
-  debug_on
-  run_verbose fabric-ca-client register --caname {{ .Org.CAName }} --id.name user1 --id.secret user1pw --id.type client --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
-  debug_off
-
-  infoln "Registering the org admin for {{ .Org.Name }}"
-  debug_on
-  run_verbose fabric-ca-client register --caname {{ .Org.CAName }} --id.name {{ toLower .Org.Name }}admin --id.secret "${{ $orgUpper }}_CA_ADMIN_CLIENT_PASSWORD" --id.type admin --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
-  debug_off
+  register_identity "user1" "user1pw" "client" "{{ .Org.CAName }}" "${LOCAL_CA_DIR}/ca-cert.pem"
+  register_identity "{{ toLower .Org.Name }}admin" "${{ $orgUpper }}_CA_ADMIN_CLIENT_PASSWORD" "admin" "{{ .Org.CAName }}" "${LOCAL_CA_DIR}/ca-cert.pem"
 
   {{ range $j, $peer := until .Org.PeerCount }}
   infoln "Generating the peer{{ $j }} msp for {{ $.Org.Name }}"
@@ -141,10 +160,7 @@ function createOrg{{ add .OrgIndex 1 }}() {
   cp "${LOCAL_CA_DIR}/ca-cert.pem" "${ORDERER_ORG_DIR}/tlsca/tlsca.{{ .Org.Domain }}-cert.pem"
 
   {{ range $j, $orderer := until .Org.OrdererCount }}
-  infoln "Registering orderer{{ $j }} for {{ $.Org.Name }}"
-  debug_on
-  run_verbose fabric-ca-client register --caname {{ $.Org.CAName }} --id.name orderer{{ $j }} --id.secret orderer{{ $j }}pw --id.type orderer --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
-  debug_off
+  register_identity "orderer{{ $j }}" "orderer{{ $j }}pw" "orderer" "{{ $.Org.CAName }}" "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
 
   infoln "Generating the orderer{{ $j }} MSP for {{ $.Org.Name }}"
   ORDERER_DIR="${ORDERER_ORG_DIR}/orderers/orderer{{ $j }}.{{ $.Org.Domain }}"

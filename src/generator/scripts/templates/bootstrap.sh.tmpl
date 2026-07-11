@@ -86,11 +86,7 @@ download() {
     echo "==> ${LABEL} already downloaded."
   else
     echo "==> Downloading ${LABEL}..."
-    curl -L --retry 5 --retry-delay 3 "${URL}" -o "${FILE}"
-    if [ $? -ne 0 ]; then
-      echo "Error downloading ${URL}"
-      exit 1
-    fi
+    curl -L --retry 5 --retry-delay 3 "${URL}" -o "${FILE}" || { echo "Error downloading ${URL}"; exit 1; }
   fi
 }
 

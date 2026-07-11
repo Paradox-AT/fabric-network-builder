@@ -152,8 +152,10 @@ function chaincodeInvokeInit() {
   while [ $rc -ne 0 -a $COUNTER -lt $MAX_RETRY ]; do
     sleep $DELAY
     infoln "invoke fcn call:${fcn_call}"
+    set +e
     run_verbose peer chaincode invoke -o localhost:{{ calculateOrdererPort 0 0 7050 }} --tls --cafile "$ORDERER_CA" -C $CHANNEL_NAME -n ${CC_NAME} "${PEER_CONN_PARMS[@]}" --isInit -c ${fcn_call}
     rc=$?
+    set -e
     COUNTER=$(expr $COUNTER + 1)
   done
   verifyResult $rc "Invoke execution on $PEERS failed "
@@ -171,8 +173,10 @@ function chaincodeQuery() {
   while [ $rc -ne 0 -a $COUNTER -lt $MAX_RETRY ]; do
     sleep $DELAY
     infoln "Attempting to Query peer0.org${ORG}, Retry after $DELAY seconds."
+    set +e
     run_verbose peer chaincode query -C $CHANNEL_NAME -n ${CC_NAME} -c '{"Args":["org.hyperledger.fabric:GetMetadata"]}'
     rc=$?
+    set -e
     COUNTER=$(expr $COUNTER + 1)
   done
   if test $rc -eq 0; then
@@ -303,8 +307,10 @@ chaincodeInvoke() {
   while [ $rc -ne 0 -a $COUNTER -lt $MAX_RETRY ]; do
     sleep $DELAY
     infoln "Attempting to Invoke on peer0.org${ORG}, Retry after $DELAY seconds."
+    set +e
     run_verbose peer chaincode invoke -o localhost:{{ calculateOrdererPort 0 0 7050 }} -C $CHANNEL_NAME -n ${CC_NAME} -c ${CC_INVOKE_CONSTRUCTOR} --tls --cafile $ORDERER_CA "${PEER_CONN_PARMS[@]}"
     rc=$?
+    set -e
     COUNTER=$(expr $COUNTER + 1)
   done
   if test $rc -eq 0; then
@@ -328,8 +334,10 @@ chaincodeQuery() {
   while [ $rc -ne 0 -a $COUNTER -lt $MAX_RETRY ]; do
     sleep $DELAY
     infoln "Attempting to Query peer0.org${ORG}, Retry after $DELAY seconds."
+    set +e
     run_verbose peer chaincode query -C $CHANNEL_NAME -n ${CC_NAME} -c ${CC_QUERY_CONSTRUCTOR}
     rc=$?
+    set -e
     COUNTER=$(expr $COUNTER + 1)
   done
   if test $rc -eq 0; then

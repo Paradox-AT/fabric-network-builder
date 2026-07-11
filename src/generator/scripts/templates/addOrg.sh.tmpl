@@ -48,9 +48,9 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
     {{- range $i, $org := .Orgs }}
     if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
       {{- if eq $.CADatabaseType "postgres" }}
-      run_verbose docker compose -f ${ROOTDIR}/compose/compose-cas.yaml up -d "db.ca.{{ .Domain }}" "ca.{{ .Domain }}"
+      run_verbose container_compose -f ${ROOTDIR}/compose/compose-cas.yaml up -d "db.ca.{{ .Domain }}" "ca.{{ .Domain }}"
       {{- else }}
-      run_verbose docker compose -f ${ROOTDIR}/compose/compose-cas.yaml up -d "ca.{{ .Domain }}"
+      run_verbose container_compose -f ${ROOTDIR}/compose/compose-cas.yaml up -d "ca.{{ .Domain }}"
       {{- end }}
     fi
     {{- end }}
@@ -60,7 +60,7 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
 
     COUNTER=0
     while [ $COUNTER -lt 10 ]; do
-      docker cp ca.${ORG_DOMAIN}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${ROOTDIR}/organizations/${ORG_DIR}/ca/ca-cert.pem" >/dev/null 2>&1 && break
+      "${CONTAINER_CLI}" cp ca.${ORG_DOMAIN}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${ROOTDIR}/organizations/${ORG_DIR}/ca/ca-cert.pem" >/dev/null 2>&1 && break
       sleep 1
       COUNTER=$((COUNTER + 1))
     done
@@ -341,7 +341,7 @@ run_verbose peer channel update -f ${ROOTDIR}/channel-artifacts/config_update_in
 # 4. Launch Infrastructure (if not already running)
 # ----------------------------------------------------------------------
 infoln "Starting peer and orderer containers for ${ORG_NAME_CORRECT} (if not already up)..."
-run_verbose docker compose -f ${ROOTDIR}/compose/docker-compose.yaml up -d
+run_verbose container_compose -f ${ROOTDIR}/compose/docker-compose.yaml up -d
 
 # ----------------------------------------------------------------------
 # 5. Join Channel
@@ -355,9 +355,14 @@ if [ "${HAS_PEERS}" = "true" ]; then
   {{- range $i, $org := .Orgs }}
   if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
     {{- range $j, $p := until .PeerCount }}
-    infoln "Joining peer{{ $j }} of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'..."
     setGlobals ${ORG_INDEX} {{ $j }}
-    run_verbose peer channel join -b ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block
+    infoln "Checking if peer{{ $j }} of ${ORG_NAME_CORRECT} is already on channel '${CHANNEL_NAME}'..."
+    if peer channel list 2>/dev/null | grep -q "^${CHANNEL_NAME}$"; then
+      warnln "Peer{{ $j }} of ${ORG_NAME_CORRECT} is already joined to '${CHANNEL_NAME}'. Skipping."
+    else
+      infoln "Joining peer{{ $j }} of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'..."
+      run_verbose peer channel join -b ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block
+    fi
     {{- end }}
   fi
   {{- end }}
@@ -368,14 +373,24 @@ if [ "${HAS_ORDERERS}" = "true" ]; then
   {{- range $i, $org := .Orgs }}
   if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
     {{- range $j, $orderer := until .OrdererCount }}
-    infoln "Joining orderer{{ $j }} of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'..."
-    run_verbose osnadmin channel join \
-      --channelID ${CHANNEL_NAME} \
-      --config-block ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block \
+    infoln "Checking if orderer{{ $j }} of ${ORG_NAME_CORRECT} is already on channel '${CHANNEL_NAME}'..."
+    if osnadmin channel list \
       -o localhost:{{ calculateOrdererPort $i $j 7053 }} \
       --ca-file "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/tlsca/tlsca.${ORG_DOMAIN}-cert.pem" \
       --client-cert "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.crt" \
-      --client-key "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.key"
+      --client-key "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.key" \
+      2>/dev/null | grep -q "\"${CHANNEL_NAME}\""; then
+      warnln "Orderer orderer{{ $j }} of ${ORG_NAME_CORRECT} is already joined to '${CHANNEL_NAME}'. Skipping."
+    else
+      infoln "Joining orderer{{ $j }} of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'..."
+      run_verbose osnadmin channel join \
+        --channelID ${CHANNEL_NAME} \
+        --config-block ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block \
+        -o localhost:{{ calculateOrdererPort $i $j 7053 }} \
+        --ca-file "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/tlsca/tlsca.${ORG_DOMAIN}-cert.pem" \
+        --client-cert "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.crt" \
+        --client-key "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.key"
+    fi
     {{- end }}
   fi
   {{- end }}
@@ -404,18 +419,23 @@ if [ "${HAS_PEERS}" = "true" ]; then
 
       PKG_PATH="${ROOTDIR}/channel-artifacts/packagedChaincode/${CC_NAME}_${CC_VERSION}.tar.gz"
       if [ -f "${PKG_PATH}" ]; then
+        export FABRIC_CFG_PATH="${FABRIC_CFG_PATH_PEER}"
+        PKG_ID=$(peer lifecycle chaincode calculatepackageid "${PKG_PATH}" 2>/dev/null || true)
+
         {{- range $i, $org := .Orgs }}
         if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
           {{- range $j, $p := until .PeerCount }}
-          infoln "Installing chaincode ${CC_NAME} on peer{{ $j }} of ${ORG_NAME_CORRECT}..."
           setGlobals ${ORG_INDEX} {{ $j }}
-          run_verbose peer lifecycle chaincode install "${PKG_PATH}"
+          infoln "Checking if chaincode ${CC_NAME} is already installed on peer{{ $j }} of ${ORG_NAME_CORRECT}..."
+          if ! peer lifecycle chaincode queryinstalled --output json 2>/dev/null | jq -r 'try (.installed_chaincodes[].package_id)' | grep -q "^${PKG_ID}$"; then
+            infoln "Installing chaincode ${CC_NAME} on peer{{ $j }} of ${ORG_NAME_CORRECT}..."
+            run_verbose peer lifecycle chaincode install "${PKG_PATH}"
+          else
+            warnln "Chaincode ${CC_NAME} is already installed on peer{{ $j }} of ${ORG_NAME_CORRECT}. Skipping."
+          fi
           {{- end }}
         fi
         {{- end }}
-
-        export FABRIC_CFG_PATH="${FABRIC_CFG_PATH_PEER}"
-        PKG_ID=$(peer lifecycle chaincode calculatepackageid "${PKG_PATH}" 2>/dev/null || true)
 
         if [ -n "${PKG_ID}" ]; then
           infoln "Approving chaincode ${CC_NAME} for ${ORG_NAME_CORRECT}..."

@@ -103,7 +103,7 @@ func main() {
 	fmt.Println("\n=== Generating Network Artifacts ===")
 
 	if !addOrgFlow {
-		// cleanArtifacts(outputDir)
+		cleanArtifacts(outputDir)
 	}
 
 	for _, gen := range generators {
