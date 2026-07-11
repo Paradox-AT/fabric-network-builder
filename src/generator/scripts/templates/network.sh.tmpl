@@ -164,12 +164,19 @@ function networkUp() {
   # 2. Generate crypto material if identities don't exist yet
   local missing_certs=false
   {{- range .Orgs }}
-  if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities" ]; then
+  {{- if gt .PeerCount 0 }}
+  if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/msp" ]; then
     missing_certs=true
   fi
   {{- end }}
+  {{- if gt .OrdererCount 0 }}
+  if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/msp" ]; then
+    missing_certs=true
+  fi
+  {{- end }}
+  {{- end }}
 
-  if [ "$missing_certs" = true ]; then
+  if [ "$missing_certs" = "true" ]; then
     generateCerts
   fi
 
@@ -207,6 +214,7 @@ function networkUp() {
       fi
     fi
   fi
+  infoln "Network is up and running..!"
 }
 
 function generateCerts() {
@@ -229,34 +237,38 @@ function generateCerts() {
     fi
 
     {{- range $i, $org := .Orgs }}
-    infoln "Waiting for {{ .Name }}'s CA to be ready..."
+    if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/msp" ] && [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/msp" ]; then
+      infoln "Waiting for {{ .Name }}'s CA to be ready..."
 
-    # Pre-create directory for the certificate
-    mkdir -p "${ROOTDIR}/organizations/{{ toLower .Name }}/ca"
+      # Pre-create directory for the certificate
+      mkdir -p "${ROOTDIR}/organizations/{{ toLower .Name }}/ca"
 
-    # Fetch the CA cert from the container. It might take a second to generate at first boot.
-    COUNTER=0
-    while [ $COUNTER -lt 10 ]; do
-      "${CONTAINER_CLI}" cp ca.{{ .Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" >/dev/null 2>&1 && break
-      sleep 1
-      COUNTER=$((COUNTER + 1))
-    done
+      # Fetch the CA cert from the container. It might take a second to generate at first boot.
+      COUNTER=0
+      while [ $COUNTER -lt 10 ]; do
+        "${CONTAINER_CLI}" cp ca.{{ .Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" >/dev/null 2>&1 && break
+        sleep 1
+        COUNTER=$((COUNTER + 1))
+      done
 
-    # Wait for CA to accept requests (Application Layer Check)
-    export FABRIC_CA_CLIENT_HOME="${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}"
-    mkdir -p "${FABRIC_CA_CLIENT_HOME}"
-    COUNTER=0
-    rc=1
-    {{- $orgUpper := toUpper .Name }}
-    while [[ $rc -ne 0 && $COUNTER -lt 20 ]]; do
-      sleep 1
-      fabric-ca-client getcainfo -u https://${{ $orgUpper }}_CA_ADMIN_USER:${{ $orgUpper }}_CA_ADMIN_PASSWORD@localhost:{{ calculateCAPort $i 7054 }} --caname {{ .CAName }} --tls.certfiles "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" >/dev/null 2>&1
-      rc=$?
-      COUNTER=$((COUNTER + 1))
-    done
+      # Wait for CA to accept requests (Application Layer Check)
+      export FABRIC_CA_CLIENT_HOME="${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/{{ .Domain }}"
+      mkdir -p "${FABRIC_CA_CLIENT_HOME}"
+      COUNTER=0
+      {{- $orgUpper := toUpper .Name }}
+      while [ $COUNTER -lt 20 ]; do
+        sleep 1
+        if fabric-ca-client getcainfo -u https://${{ $orgUpper }}_CA_ADMIN_USER:${{ $orgUpper }}_CA_ADMIN_PASSWORD@localhost:{{ calculateCAPort $i 7054 }} --caname {{ .CAName }} --tls.certfiles "${ROOTDIR}/organizations/{{ toLower .Name }}/ca/ca-cert.pem" >/dev/null 2>&1; then
+          break
+        fi
+        COUNTER=$((COUNTER + 1))
+      done
 
-    # Now that CA is ready, run the full enrollment script
-    . "${ROOTDIR}/organizations/{{ toLower .Name }}/scripts/registerEnroll.sh"
+      # Now that CA is ready, run the full enrollment script
+      . "${ROOTDIR}/organizations/{{ toLower .Name }}/scripts/registerEnroll.sh"
+    else
+      infoln "Crypto material already exists for {{ .Name }}. Skipping CA wait and enrollment."
+    fi
     {{- end }}
   else
     which cryptogen >/dev/null 2>&1
@@ -267,29 +279,33 @@ function generateCerts() {
     infoln "Generating certificates using cryptogen tool"
 
     {{- range .Orgs }}
-    infoln "Creating {{ .Name }} Identities"
-    debug_on
-    cryptogen generate --config=${ROOTDIR}/organizations/{{ toLower .Name }}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/{{ toLower .Name }}/identities"
+    if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/msp" ] && [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/msp" ]; then
+      infoln "Creating {{ .Name }} Identities"
+      debug_on
+      cryptogen generate --config=${ROOTDIR}/organizations/{{ toLower .Name }}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/{{ toLower .Name }}/identities"
 
-    # Flatten the cryptogen output to match our Sovereign structure
-    if [ -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations" ]; then
-      mkdir -p ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer
-      mv ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations/{{ .Domain }}/* ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/ 2>/dev/null || true
-      rm -rf ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peerOrganizations
-      # Standardize signcerts to cert.pem
-      find ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
-    fi
-    if [ -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations" ]; then
-      mkdir -p ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer
-      mv ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations/{{ .Domain }}/* ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/ 2>/dev/null || true
-      rm -rf ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations
-      # Standardize signcerts to cert.pem
-      find ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
-    fi
+      # Flatten the cryptogen output to match our Sovereign structure
+      if [ -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer" ]; then
+        mkdir -p ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer
+        mv ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/{{ .Domain }}/* ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/ 2>/dev/null || true
+        rm -rf ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer
+        # Standardize signcerts to cert.pem
+        find ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
+      fi
+      if [ -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations" ]; then
+        mkdir -p ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer
+        mv ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations/{{ .Domain }}/* ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/ 2>/dev/null || true
+        rm -rf ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/ordererOrganizations
+        # Standardize signcerts to cert.pem
+        find ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
+      fi
 
-    res=$?
-    debug_off
-    verifyResult $res "Failed to generate certificates for {{ .Name }}..."
+      res=$?
+      debug_off
+      verifyResult $res "Failed to generate certificates for {{ .Name }}..."
+    else
+      infoln "Crypto material already exists for {{ .Name }}. Skipping cryptogen generation."
+    fi
     {{- end }}
   fi
 }
@@ -682,23 +698,7 @@ function deployCC() {
   fi
 }
 
-# Helper to resolve organization string to integer index
-function getOrgIndex() {
-  local input="${1:-1}"
-  # Check if numeric
-  if [[ "$input" =~ ^[0-9]+$ ]]; then
-    echo "$input"
-    return
-  fi
-  local name=$(echo "$input" | tr '[:upper:]' '[:lower:]')
-  {{- range $i, $org := .Orgs }}
-  if [ "$name" = "{{ toLower .Name }}" ] || [ "$name" = "org{{ inc $i }}" ] || [ "$name" = "{{ toLower .Domain }}" ]; then
-    echo "{{ inc $i }}"
-    return
-  fi
-  {{- end }}
-  echo "1"
-}
+
 
 function listChaincode() {
   export FABRIC_CFG_PATH="${ROOTDIR}/config"
@@ -707,7 +707,7 @@ function listChaincode() {
 
   local org_idx=$(getOrgIndex "$ORG")
   setGlobals "$org_idx"
-  
+
   println "Installed chaincodes on peer0.org${org_idx}:"
   queryInstalledOnPeer
   println
@@ -749,7 +749,7 @@ function queryChaincode() {
 function packageChaincode() {
   export FABRIC_CFG_PATH="${ROOTDIR}/config"
   . "${ROOTDIR}/scripts/envVar.sh"
-  
+
   infoln "Packaging chaincode: ${CC_NAME} (version: ${CC_VERSION})"
   ${ROOTDIR}/scripts/packageCC.sh "$CC_NAME" "$CC_SRC_PATH" "$CC_SRC_LANGUAGE" "$CC_VERSION" "true"
 }
@@ -762,10 +762,10 @@ if [ "$MODE" == "up" ]; then
 elif [ "$MODE" == "bootstrap" ]; then
   bootstrap
 elif [ "$MODE" == "createChannel" ]; then
-  CHANNEL_NAME=${1:-"mychannel"}
+  CHANNEL_NAME=${1:-"${CHANNEL_NAME}"}
   createChannel
 elif [ "$MODE" == "deployCC" ]; then
-  CHANNEL_NAME="mychannel"
+  CHANNEL_NAME="${CHANNEL_NAME}"
   CC_NAME="basic"
   CC_SRC_PATH="NA"
   CC_SRC_LANGUAGE="go"
@@ -835,7 +835,7 @@ elif [ "$MODE" == "cc" ]; then
     exit 1
   fi
 
-  CHANNEL_NAME="mychannel"
+  CHANNEL_NAME="${CHANNEL_NAME}"
   CC_NAME="basic"
   CC_SRC_PATH="NA"
   CC_SRC_LANGUAGE="go"
@@ -928,6 +928,33 @@ elif [ "$MODE" == "cc" ]; then
     println "Unknown cc subcommand: $SUBCOMMAND"
     exit 1
   fi
+elif [ "$MODE" == "addOrg" ]; then
+  ORG=""
+  CHANNEL_NAME="${CHANNEL_NAME}"
+  while [[ $# -ge 1 ]] ; do
+    key="$1"
+    case $key in
+    -org )
+      ORG="${2:-}"
+      shift
+      ;;
+    -c )
+      CHANNEL_NAME="${2:-}"
+      shift
+      ;;
+    * )
+      errorln "Unknown flag: $key"
+      exit 1
+      ;;
+    esac
+    shift
+  done
+
+  if [ -z "$ORG" ]; then
+    fatalln "Please specify the organization to add using -org flag"
+  fi
+
+  ${ROOTDIR}/scripts/addOrg.sh "$ORG" "$CHANNEL_NAME"
 elif [ "$MODE" == "down" ]; then
   networkDown
 else
@@ -936,6 +963,7 @@ else
   println "  network.sh up"
   println "  network.sh createChannel <channel_name>"
   println "  network.sh deployCC -ccn <name> -ccp <path> -ccl <language>"
+  println "  network.sh addOrg -org <OrgName> -c <ChannelName>"
   println "  network.sh cc [package|list|invoke|query] [flags]"
   println "  network.sh down"
   exit 1

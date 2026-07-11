@@ -12,7 +12,7 @@ ROOTDIR=$(cd "$(dirname "$0")"/../ && pwd)
 export FABRIC_CFG_PATH_ORDERER="${ROOTDIR}/configtx"
 export FABRIC_CFG_PATH_PEER="${ROOTDIR}/config"
 
-CHANNEL_NAME="${1:-mychannel}"
+CHANNEL_NAME="${1:-${CHANNEL_NAME}}"
 DELAY="${2:-3}"
 MAX_RETRY="${3:-5}"
 VERBOSE="${4:-false}"

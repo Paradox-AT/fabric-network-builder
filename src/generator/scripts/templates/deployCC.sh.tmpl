@@ -3,7 +3,9 @@ set -euo pipefail
 
 source scripts/utils.sh
 
-CHANNEL_NAME=${1:-"mychannel"}
+# Load config to get default channel name
+. network.config
+CHANNEL_NAME=${1:-"${CHANNEL_NAME}"}
 CC_NAME=${2}
 CC_SRC_PATH=${3}
 CC_SRC_LANGUAGE=${4}

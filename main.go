@@ -34,6 +34,7 @@ func main() {
 
 	var cfg *config.NetworkConfig
 	skipWizard := false
+	addOrgFlow := false
 
 	if loadedCfg != nil {
 		var action string
@@ -44,6 +45,7 @@ func main() {
 					Options(
 						huh.NewOption("Start fresh (overwrite existing config)", "fresh"),
 						huh.NewOption("Make changes to existing config", "modify"),
+						huh.NewOption("Add a new organization to existing network", "add-org"),
 						huh.NewOption("Reset (Regenerate artifacts from saved config)", "reset"),
 					).
 					Value(&action),
@@ -63,6 +65,9 @@ func main() {
 			cfg = nil
 		case "modify":
 			cfg = loadedCfg
+		case "add-org":
+			cfg = loadedCfg
+			addOrgFlow = true
 		case "reset":
 			cfg = loadedCfg
 			skipWizard = true
@@ -71,7 +76,11 @@ func main() {
 
 	if !skipWizard {
 		// Run the wizard to collect/update configuration
-		cfg, err = cli.RunWizard(cfg)
+		if addOrgFlow {
+			cfg, err = cli.RunAddOrgWizard(cfg)
+		} else {
+			cfg, err = cli.RunWizard(cfg)
+		}
 		if err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {
 				fmt.Println("\nAborted.")
@@ -93,7 +102,9 @@ func main() {
 
 	fmt.Println("\n=== Generating Network Artifacts ===")
 
-	// cleanArtifacts(outputDir)
+	if !addOrgFlow {
+		// cleanArtifacts(outputDir)
+	}
 
 	for _, gen := range generators {
 		err := gen.Generate(cfg, outputDir)

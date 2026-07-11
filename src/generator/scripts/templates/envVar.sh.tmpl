@@ -94,6 +94,24 @@ parsePeerConnectionParameters() {
   done
 }
 
+# Helper to resolve organization string to integer index
+getOrgIndex() {
+  local input="${1:-1}"
+  # Check if numeric
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    echo "$input"
+    return
+  fi
+  local name=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+  {{- range $i, $org := .Orgs }}
+  if [ "$name" = "{{ toLower .Name }}" ] || [ "$name" = "org{{ inc $i }}" ] || [ "$name" = "{{ toLower .Domain }}" ]; then
+    echo "{{ inc $i }}"
+    return
+  fi
+  {{- end }}
+  echo "1"
+}
+
 # Returns the display name of the org (proper case, e.g. "Org1")
 getOrgName() {
   {{- $firstOrg := true }}

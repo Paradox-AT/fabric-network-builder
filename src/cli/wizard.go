@@ -227,7 +227,7 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 						Title(fmt.Sprintf("[Org %d] Number of orderer nodes:", i+1)).
 						Value(&ordererCountStr),
 					huh.NewInput().
-						Title(fmt.Sprintf("[Org %d] Number of peers:", i+1)).
+						Title(fmt.Sprintf("[Org %d] Number of peers nodes:", i+1)).
 						Value(&peerCountStr),
 				),
 			).Run()
@@ -305,6 +305,144 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 	}
 
 	cfg.ChannelCount, _ = strconv.Atoi(channelCountStr)
+	return cfg, nil
+}
+
+// RunAddOrgWizard executes the interactive prompt to add a new organization to an existing configuration
+func RunAddOrgWizard(cfg *config.NetworkConfig) (*config.NetworkConfig, error) {
+	fmt.Println("=== Add Organization to Existing Network ===")
+	fmt.Println("This wizard will help you configure the new organization's properties.")
+	fmt.Println()
+
+	// Initialize new organization config with default values
+	newOrgIndex := len(cfg.Orgs) + 1
+	newOrg := config.OrgConfig{
+		Name:          fmt.Sprintf("Org%d", newOrgIndex),
+		MSPID:         fmt.Sprintf("Org%dMSP", newOrgIndex),
+		Domain:        fmt.Sprintf("org%d.example.com", newOrgIndex),
+		CAName:        fmt.Sprintf("ca-org%d", newOrgIndex),
+		OrdererCount:  1,
+		PeerCount:     1,
+		StateDatabase: "leveldb",
+	}
+
+	ordererCountStr := strconv.Itoa(newOrg.OrdererCount)
+	peerCountStr := strconv.Itoa(newOrg.PeerCount)
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Organization Name:").
+				Value(&newOrg.Name).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return errors.New("required")
+					}
+					// Ensure name is unique
+					for _, existingOrg := range cfg.Orgs {
+						if strings.EqualFold(existingOrg.Name, s) {
+							return errors.New("an organization with this name already exists")
+						}
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("MSP ID:").
+				Value(&newOrg.MSPID).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return errors.New("required")
+					}
+					for _, existingOrg := range cfg.Orgs {
+						if strings.EqualFold(existingOrg.MSPID, s) {
+							return errors.New("an organization with this MSP ID already exists")
+						}
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Base Domain:").
+				Value(&newOrg.Domain).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return errors.New("required")
+					}
+					for _, existingOrg := range cfg.Orgs {
+						if strings.EqualFold(existingOrg.Domain, s) {
+							return errors.New("an organization with this domain already exists")
+						}
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Certificate Authority (CA) Name:").
+				Value(&newOrg.CAName).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return errors.New("required")
+					}
+					for _, existingOrg := range cfg.Orgs {
+						if strings.EqualFold(existingOrg.CAName, s) {
+							return errors.New("an organization with this CA name already exists")
+						}
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Number of orderer nodes:").
+				Value(&ordererCountStr).
+				Validate(func(s string) error {
+					v, err := strconv.Atoi(s)
+					if err != nil || v < 0 {
+						return errors.New("must be a non-negative number")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Number of peers nodes:").
+				Value(&peerCountStr).
+				Validate(func(s string) error {
+					v, err := strconv.Atoi(s)
+					if err != nil || v <= 0 {
+						return errors.New("must be a positive number")
+					}
+					return nil
+				}),
+		),
+	).Run()
+
+	if err != nil {
+		return nil, err
+	}
+
+	newOrg.OrdererCount, _ = strconv.Atoi(ordererCountStr)
+	newOrg.PeerCount, _ = strconv.Atoi(peerCountStr)
+	newOrg.Peers = make([]config.PeerConfig, newOrg.PeerCount)
+
+	// Ask state database preference per peer
+	for p := 0; p < newOrg.PeerCount; p++ {
+		newOrg.Peers[p].StateDatabase = "leveldb"
+		peerDB := newOrg.Peers[p].StateDatabase
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title(fmt.Sprintf("[%s / Peer %d] State database:", newOrg.Name, p)).
+					Options(
+						huh.NewOption("LevelDB (Default, embedded)", "leveldb"),
+						huh.NewOption("CouchDB (Rich JSON queries)", "couchdb"),
+					).
+					Value(&peerDB),
+			),
+		).Run()
+		if err != nil {
+			return nil, err
+		}
+		newOrg.Peers[p].StateDatabase = peerDB
+	}
+
+	// Append to the list of orgs
+	cfg.Orgs = append(cfg.Orgs, newOrg)
+
 	return cfg, nil
 }
 
