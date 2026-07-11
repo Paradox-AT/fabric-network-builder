@@ -706,9 +706,12 @@ function listChaincode() {
   . "${ROOTDIR}/scripts/ccutils.sh"
 
   local org_idx=$(getOrgIndex "$ORG")
+  if ! verifyPeerOrg "$org_idx"; then
+    fatalln "Organization '$(getOrgName "$org_idx")' is not configured with peer nodes. This command requires a peer organization."
+  fi
   setGlobals "$org_idx"
 
-  println "Installed chaincodes on peer0.org${org_idx}:"
+  println "Installed chaincodes on peer0 of $(getOrgName "$org_idx"):"
   queryInstalledOnPeer
   println
   println "Committed chaincodes:"
@@ -721,6 +724,9 @@ function invokeChaincode() {
   . "${ROOTDIR}/scripts/ccutils.sh"
 
   local org_idx=$(getOrgIndex "$ORG")
+  if ! verifyPeerOrg "$org_idx"; then
+    fatalln "Organization '$(getOrgName "$org_idx")' is not configured with peer nodes. This command requires a peer organization."
+  fi
   setGlobals "$org_idx"
 
   # Construct connection params for all orgs that have peers
@@ -741,6 +747,9 @@ function queryChaincode() {
   . "${ROOTDIR}/scripts/ccutils.sh"
 
   local org_idx=$(getOrgIndex "$ORG")
+  if ! verifyPeerOrg "$org_idx"; then
+    fatalln "Organization '$(getOrgName "$org_idx")' is not configured with peer nodes. This command requires a peer organization."
+  fi
   setGlobals "$org_idx"
 
   chaincodeQuery "$org_idx" "$CHANNEL_NAME" "$CC_NAME" "$CC_QUERY_CONSTRUCTOR"

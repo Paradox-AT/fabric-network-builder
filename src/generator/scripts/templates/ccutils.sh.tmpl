@@ -241,9 +241,7 @@ queryInstalledOnPeer() {
     set -e
     COUNTER=$(expr $COUNTER + 1)
   done
-  if [ $rc -ne 0 ]; then
-    cat log.txt
-  fi
+  cat log.txt
 }
 
 queryCommittedOnChannel() {
@@ -259,9 +257,7 @@ queryCommittedOnChannel() {
     set -e
     COUNTER=$(expr $COUNTER + 1)
   done
-  if [ $rc -ne 0 ]; then
-    cat log.txt
-  fi
+  cat log.txt
   if test $rc -ne 0; then
     fatalln "After $MAX_RETRY attempts, Failed to retrieve committed chaincode!"
   fi

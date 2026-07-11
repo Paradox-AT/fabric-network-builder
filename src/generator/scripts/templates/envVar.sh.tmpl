@@ -7,6 +7,11 @@ TEST_NETWORK_HOME=${TEST_NETWORK_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. 
 . ${TEST_NETWORK_HOME}/scripts/utils.sh
 
 export CORE_PEER_TLS_ENABLED=true
+if [ "${VERBOSE:-false}" = "true" ]; then
+  export FABRIC_LOGGING_SPEC=${FABRIC_LOGGING_SPEC:-info}
+else
+  export FABRIC_LOGGING_SPEC=${FABRIC_LOGGING_SPEC:-error}
+fi
 
 # ORDERER_CA and ORDERER_ADDRESS are now set per-org inside setGlobals()
 # so that every operation uses the correct orderer for the calling org.
@@ -74,7 +79,7 @@ parsePeerConnectionParameters() {
   PEERS=""
   while [ "$#" -gt 0 ]; do
     setGlobals ${1:-}
-    PEER="peer0.org${1:-}"
+    PEER="peer0.$(getOrgDomain ${1:-})"
     ## Set peer addresses
     if [ -z "$PEERS" ]
     then
@@ -140,19 +145,32 @@ getOrgDir() {
 
 getOrgDomain() {
   {{- $firstOrg := true }}
-{{- range $i, $org := .Orgs }}
-  {{- if gt .PeerCount 0 }}
+  {{- range $i, $org := .Orgs }}
   {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
     echo "{{ .Domain }}"
     {{- $firstOrg = false }}
   {{- end }}
-{{- end }}
+  else
+    fatalln "getOrgDomain: unknown org index '${1:-}'"
+  fi
+}
+
+verifyPeerOrg() {
+  local org_idx=$1
+  {{- $firstOrg := true }}
+  {{- range $i, $org := .Orgs }}
+    {{- if gt .PeerCount 0 }}
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $org_idx -eq {{ inc $i }} ]; then
+    return 0
+      {{- $firstOrg = false }}
+    {{- end }}
+  {{- end }}
   {{- if $firstOrg }}
   if false; then
     :
   {{- end }}
   else
-    fatalln "getOrgDomain: unknown org index '${1:-}'"
+    return 1
   fi
 }
 
