@@ -2,6 +2,7 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"os"
@@ -37,7 +38,13 @@ type OrgComposeData struct {
 }
 
 // Generate implements the Generator interface
-func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir string) error {
+func (g *DockerComposeGenerator) Generate(ctx context.Context, cfg *config.NetworkConfig, outputDir string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	funcs := utils.GetFuncMap()
 
 	// 1. Parse all templates
@@ -84,12 +91,13 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 
 	// 2. Generate Organizational Compose Files
 	for i, org := range cfg.Orgs {
-		orgComposeDir := filepath.Join(outputDir, "organizations", strings.ToLower(org.Name), "compose")
-		err := os.MkdirAll(orgComposeDir, 0755)
-		if err != nil {
-			return fmt.Errorf("failed to create compose directory for org %s: %w", org.Name, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
+		orgComposeDir := filepath.Join(outputDir, "organizations", strings.ToLower(org.Name), "compose")
 		orgCopy := org // capture for closure
 		bindAddress := cfg.BindAddress
 		if bindAddress == "" {
@@ -117,11 +125,9 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 				return fmt.Errorf("failed to execute peer template for %s: %w", org.Name, err)
 			}
 			filePath := filepath.Join(orgComposeDir, "compose-peer.yaml")
-			err = os.WriteFile(filePath, buf.Bytes(), 0644)
-			if err != nil {
+			if err := config.WriteFileAtomic(filePath, buf.Bytes(), 0600); err != nil {
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
 			}
-			fmt.Printf("Generated %s\n", filePath)
 
 			// Generate couch overlay if any peer in this org uses CouchDB
 			hasCouchDB := false
@@ -138,11 +144,9 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 					return fmt.Errorf("failed to execute couch template for %s: %w", org.Name, err)
 				}
 				couchFilePath := filepath.Join(orgComposeDir, "compose-couch.yaml")
-				err = os.WriteFile(couchFilePath, couchBuf.Bytes(), 0644)
-				if err != nil {
+				if err := config.WriteFileAtomic(couchFilePath, couchBuf.Bytes(), 0600); err != nil {
 					return fmt.Errorf("failed to write %s: %w", couchFilePath, err)
 				}
-				fmt.Printf("Generated %s\n", couchFilePath)
 			}
 		}
 
@@ -153,11 +157,9 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 				return fmt.Errorf("failed to execute orderer template for %s: %w", org.Name, err)
 			}
 			filePath := filepath.Join(orgComposeDir, "compose-orderer.yaml")
-			err = os.WriteFile(filePath, buf.Bytes(), 0644)
-			if err != nil {
+			if err := config.WriteFileAtomic(filePath, buf.Bytes(), 0600); err != nil {
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
 			}
-			fmt.Printf("Generated %s\n", filePath)
 		}
 
 		// Generate CA compose if using Fabric CA
@@ -168,20 +170,14 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 				return fmt.Errorf("failed to execute CA compose template for %s: %w", org.Name, err)
 			}
 			filePath := filepath.Join(orgComposeDir, "compose-ca.yaml")
-			err = os.WriteFile(filePath, buf.Bytes(), 0644)
-			if err != nil {
+			if err := config.WriteFileAtomic(filePath, buf.Bytes(), 0600); err != nil {
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
 			}
-			fmt.Printf("Generated %s\n", filePath)
 		}
 	}
 
 	// 3. Generate Hub Compose Files
 	hubDir := filepath.Join(outputDir, "compose")
-	err = os.MkdirAll(hubDir, 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create hub directory: %w", err)
-	}
 
 	// Generate compose/compose-peers.yaml
 	var peersBuf bytes.Buffer
@@ -189,11 +185,10 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 	if err != nil {
 		return fmt.Errorf("failed to execute hub-peers template: %w", err)
 	}
-	err = os.WriteFile(filepath.Join(hubDir, "compose-peers.yaml"), peersBuf.Bytes(), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write compose/compose-peers.yaml: %w", err)
+	peersPath := filepath.Join(hubDir, "compose-peers.yaml")
+	if err := config.WriteFileAtomic(peersPath, peersBuf.Bytes(), 0600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", peersPath, err)
 	}
-	fmt.Printf("Generated %s\n", filepath.Join(hubDir, "compose-peers.yaml"))
 
 	// Generate compose/compose-orderers.yaml
 	var orderersBuf bytes.Buffer
@@ -201,11 +196,10 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 	if err != nil {
 		return fmt.Errorf("failed to execute hub-orderers template: %w", err)
 	}
-	err = os.WriteFile(filepath.Join(hubDir, "compose-orderers.yaml"), orderersBuf.Bytes(), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write compose/compose-orderers.yaml: %w", err)
+	orderersPath := filepath.Join(hubDir, "compose-orderers.yaml")
+	if err := config.WriteFileAtomic(orderersPath, orderersBuf.Bytes(), 0600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", orderersPath, err)
 	}
-	fmt.Printf("Generated %s\n", filepath.Join(hubDir, "compose-orderers.yaml"))
 
 	// Generate compose/docker-compose.yaml (Master)
 	var masterBuf bytes.Buffer
@@ -213,11 +207,10 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 	if err != nil {
 		return fmt.Errorf("failed to execute hub-master template: %w", err)
 	}
-	err = os.WriteFile(filepath.Join(hubDir, "docker-compose.yaml"), masterBuf.Bytes(), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write compose/docker-compose.yaml: %w", err)
+	masterPath := filepath.Join(hubDir, "docker-compose.yaml")
+	if err := config.WriteFileAtomic(masterPath, masterBuf.Bytes(), 0600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", masterPath, err)
 	}
-	fmt.Printf("Generated %s\n", filepath.Join(hubDir, "docker-compose.yaml"))
 
 	// Generate compose/compose-cas.yaml if using Fabric CA
 	if cfg.CryptoStrategy == "Fabric CA" {
@@ -226,18 +219,16 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 		if err != nil {
 			return fmt.Errorf("failed to execute hub-cas template: %w", err)
 		}
-		err = os.WriteFile(filepath.Join(hubDir, "compose-cas.yaml"), casBuf.Bytes(), 0644)
-		if err != nil {
-			return fmt.Errorf("failed to write compose/compose-cas.yaml: %w", err)
+		casPath := filepath.Join(hubDir, "compose-cas.yaml")
+		if err := config.WriteFileAtomic(casPath, casBuf.Bytes(), 0600); err != nil {
+			return fmt.Errorf("failed to write %s: %w", casPath, err)
 		}
-		fmt.Printf("Generated %s\n", filepath.Join(hubDir, "compose-cas.yaml"))
 	}
 
 	// Generate compose/compose-utils.yaml and config/servers.json if using Postgres
 	if cfg.CADatabaseType == "postgres" && cfg.CryptoStrategy == "Fabric CA" {
 		configDir := filepath.Join(outputDir, "config")
-		err = os.MkdirAll(configDir, 0755)
-		if err != nil {
+		if err := os.MkdirAll(configDir, 0700); err != nil {
 			return fmt.Errorf("failed to create config directory: %w", err)
 		}
 
@@ -247,11 +238,9 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 			return fmt.Errorf("failed to execute servers template: %w", err)
 		}
 		serversPath := filepath.Join(configDir, "pgadmin-servers.json")
-		err = os.WriteFile(serversPath, serversBuf.Bytes(), 0644)
-		if err != nil {
-			return fmt.Errorf("failed to write config/pgadmin-servers.json: %w", err)
+		if err := config.WriteFileAtomic(serversPath, serversBuf.Bytes(), 0600); err != nil {
+			return fmt.Errorf("failed to write %s: %w", serversPath, err)
 		}
-		fmt.Printf("Generated %s\n", serversPath)
 
 		var utilsBuf bytes.Buffer
 		err = utilsTmpl.Execute(&utilsBuf, cfg)
@@ -259,12 +248,11 @@ func (g *DockerComposeGenerator) Generate(cfg *config.NetworkConfig, outputDir s
 			return fmt.Errorf("failed to execute compose-utils template: %w", err)
 		}
 		utilsPath := filepath.Join(hubDir, "compose-utils.yaml")
-		err = os.WriteFile(utilsPath, utilsBuf.Bytes(), 0644)
-		if err != nil {
-			return fmt.Errorf("failed to write compose/compose-utils.yaml: %w", err)
+		if err := config.WriteFileAtomic(utilsPath, utilsBuf.Bytes(), 0600); err != nil {
+			return fmt.Errorf("failed to write %s: %w", utilsPath, err)
 		}
-		fmt.Printf("Generated %s\n", utilsPath)
 	}
 
 	return nil
 }
+

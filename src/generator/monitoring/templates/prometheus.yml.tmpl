@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 5s
+  external_labels:
+    monitor: '{{ toLower .NetworkName }}-monitor'
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+{{- range $orgIndex, $org := .Orgs }}
+  {{- if gt .OrdererCount 0 }}
+  {{- range $i, $e := until .OrdererCount }}
+  - job_name: "orderer{{ $i }}_{{ toLower $org.Name }}"
+    static_configs:
+      - targets: ["orderer{{ $i }}.{{ $org.Domain }}:9443"]
+  {{- end }}
+  {{- end }}
+  {{- if gt .PeerCount 0 }}
+  {{- range $i, $e := until .PeerCount }}
+  - job_name: "peer{{ $i }}_{{ toLower $org.Name }}"
+    static_configs:
+      - targets: ["peer{{ $i }}.{{ $org.Domain }}:9444"]
+  {{- end }}
+  {{- end }}
+{{- end }}
+  - job_name: "cadvisor"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["cadvisor:8080"]
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]

@@ -1,44 +1,172 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Initialize colors using terminal capabilities if stdout is a TTY and supports color
-if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
-  C_RESET="$(tput sgr0)"
-  C_RED="$(tput setaf 1)"
-  C_GREEN="$(tput setaf 2)"
-  C_BLUE="$(tput setaf 4)"
-  C_YELLOW="$(tput setaf 3)"
+# Initialize rich ANSI colors if stdout is a TTY, supports color, and NO_COLOR is unset
+if [ -z "${NO_COLOR:-}" ] && [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  C_RESET="\033[0m"
+  C_BOLD="\033[1m"
+  C_DIM="\033[2m"
+  C_UNDERLINE="\033[4m"
+
+  C_BLACK="\033[30m"
+  C_RED="\033[31m"
+  C_GREEN="\033[32m"
+  C_YELLOW="\033[33m"
+  C_BLUE="\033[34m"
+  C_MAGENTA="\033[35m"
+  C_CYAN="\033[36m"
+  C_WHITE="\033[37m"
+
+  C_BOLD_RED="\033[1;31m"
+  C_BOLD_GREEN="\033[1;32m"
+  C_BOLD_YELLOW="\033[1;33m"
+  C_BOLD_BLUE="\033[1;34m"
+  C_BOLD_MAGENTA="\033[1;35m"
+  C_BOLD_CYAN="\033[1;36m"
+  C_BOLD_WHITE="\033[1;37m"
 else
   C_RESET=""
+  C_BOLD=""
+  C_DIM=""
+  C_UNDERLINE=""
+
+  C_BLACK=""
   C_RED=""
   C_GREEN=""
-  C_BLUE=""
   C_YELLOW=""
+  C_BLUE=""
+  C_MAGENTA=""
+  C_CYAN=""
+  C_WHITE=""
+
+  C_BOLD_RED=""
+  C_BOLD_GREEN=""
+  C_BOLD_YELLOW=""
+  C_BOLD_BLUE=""
+  C_BOLD_MAGENTA=""
+  C_BOLD_CYAN=""
+  C_BOLD_WHITE=""
 fi
+
+export C_RESET C_BOLD C_DIM C_UNDERLINE
+export C_BLACK C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE
+export C_BOLD_RED C_BOLD_GREEN C_BOLD_YELLOW C_BOLD_BLUE C_BOLD_MAGENTA C_BOLD_CYAN C_BOLD_WHITE
 
 function println() {
   echo -e "${1:-}"
 }
 
-function errorln() {
-  println "${C_RED}${1:-}${C_RESET}"
+function infoln() {
+  println "${C_BOLD_CYAN}[INFO]${C_RESET}  ${1:-}"
 }
 
 function successln() {
-  println "${C_GREEN}${1:-}${C_RESET}"
-}
-
-function infoln() {
-  println "${C_BLUE}${1:-}${C_RESET}"
+  println "${C_BOLD_GREEN}[SUCCESS]${C_RESET} ${1:-}"
 }
 
 function warnln() {
-  println "${C_YELLOW}${1:-}${C_RESET}"
+  println "${C_BOLD_YELLOW}[WARN]${C_RESET}  ${1:-}"
+}
+
+function errorln() {
+  println "${C_BOLD_RED}[ERROR]${C_RESET} ${1:-}"
 }
 
 function fatalln() {
   errorln "${1:-}"
   exit 1
+}
+
+function stepln() {
+  println "${C_CYAN}  ▸${C_RESET} ${1:-}"
+}
+
+function task_successln() {
+  println "${C_GREEN}  ✔${C_RESET} ${1:-}"
+}
+
+function task_warnln() {
+  println "${C_YELLOW}  ▲${C_RESET} ${1:-}"
+}
+
+function task_errorln() {
+  println "${C_RED}  ✖${C_RESET} ${1:-}"
+}
+
+function task_start() {
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    println "${C_CYAN}  ▸${C_RESET} ${1:-}"
+  else
+    printf "%b" "${C_CYAN}  ▸${C_RESET} ${1:-} "
+  fi
+}
+
+function task_done() {
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    println "${C_GREEN}  ✔${C_RESET} ${1:-Done}"
+  else
+    printf "%b\n" "${C_GREEN}✔${C_RESET}"
+  fi
+}
+
+function task_fail() {
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    println "${C_RED}  ✖${C_RESET} ${1:-Failed}"
+  else
+    printf "%b\n" "${C_RED}✖${C_RESET}"
+  fi
+}
+
+function run_task() {
+  local desc="$1"
+  shift
+  task_start "${desc}"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    println "${C_DIM}+ $*${C_RESET}"
+    set +e
+    "$@"
+    local res=$?
+    set -e
+    if [ $res -eq 0 ]; then
+      task_done
+    else
+      task_fail
+    fi
+    return $res
+  else
+    local log_file="${ROOTDIR:-.}/log.txt"
+    set +e
+    "$@" >&"${log_file}" 2>&1
+    local res=$?
+    set -e
+    if [ $res -eq 0 ]; then
+      task_done
+      return 0
+    else
+      task_fail
+      _LAST_FAILED_LOG="${log_file}"
+      cat "${log_file}"
+      return $res
+    fi
+  fi
+}
+
+function sectionln() {
+  println "\n${C_BOLD_BLUE}===> ${1:-}${C_RESET}"
+}
+
+function headerln() {
+  local title="  ${1:-}  "
+  local len=${#title}
+  local border_len=$((len + 4))
+  if [ $border_len -lt 64 ]; then
+    border_len=64
+  fi
+  local border
+  border=$(printf '═%.0s' $(seq 1 $border_len))
+  println "\n${C_BOLD_BLUE}${border}"
+  println "  ${C_BOLD_WHITE}${1:-}${C_RESET}"
+  println "${C_BOLD_BLUE}${border}${C_RESET}"
 }
 
 function verifyResult() {
@@ -60,24 +188,26 @@ function container_compose() {
 export -f container_compose
 
 function debug_on() {
-  if [ "${VERBOSE:-false}" = "true" ]; then
-    set -x
-  fi
+  :
 }
 
 function debug_off() {
-  if [ "${VERBOSE:-false}" = "true" ]; then
-    { set +x; } 2>/dev/null
-  fi
+  :
 }
 
+export _LAST_FAILED_LOG=""
+
 function run_verbose() {
-  local log_file="log.txt"
+  local log_file="${ROOTDIR:-.}/log.txt"
   if [ "${VERBOSE:-false}" = "true" ]; then
+    println "${C_DIM}+ $*${C_RESET}"
     set +e
     "$@" 2>&1 | tee "${log_file}"
     local res=${PIPESTATUS[0]}
     set -e
+    if [ $res -ne 0 ]; then
+      _LAST_FAILED_LOG="${log_file}"
+    fi
     return $res
   else
     set +e
@@ -85,6 +215,7 @@ function run_verbose() {
     local res=$?
     set -e
     if [ $res -ne 0 ]; then
+      _LAST_FAILED_LOG="${log_file}"
       cat "${log_file}"
     fi
     return $res
@@ -95,13 +226,11 @@ function run_verbose() {
 function check_exit_status() {
   local exit_status=$?
   if [ $exit_status -ne 0 ]; then
-    errorln "Script failed with status ${exit_status}."
-    if [ -f "log.txt" ]; then
-      errorln "Last log messages (log.txt):"
-      cat "log.txt"
-    elif [ -f "../log.txt" ]; then
-      errorln "Last log messages (log.txt):"
-      cat "../log.txt"
+    printf "\n"
+    errorln "Script exited with status ${exit_status}."
+    if [ -n "${_LAST_FAILED_LOG:-}" ] && [ -f "${_LAST_FAILED_LOG}" ]; then
+      errorln "Last failure log (${_LAST_FAILED_LOG}):"
+      cat "${_LAST_FAILED_LOG}"
     fi
   fi
 }
@@ -111,10 +240,20 @@ export -f debug_on
 export -f debug_off
 export -f run_verbose
 
-export -f errorln
-export -f successln
-export -f infoln
-export -f warnln
-export -f verifyResult
-export -f fatalln
 export -f println
+export -f infoln
+export -f successln
+export -f warnln
+export -f errorln
+export -f fatalln
+export -f stepln
+export -f task_successln
+export -f task_warnln
+export -f task_errorln
+export -f task_start
+export -f task_done
+export -f task_fail
+export -f run_task
+export -f sectionln
+export -f headerln
+export -f verifyResult

@@ -2,6 +2,7 @@ package scripts
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"os"
@@ -12,11 +13,6 @@ import (
 	"network-builder/src/config"
 	"network-builder/src/generator/utils"
 )
-
-// sensitiveFiles lists generated output files that must have restrictive permissions.
-var sensitiveFiles = map[string]bool{
-	".env": true,
-}
 
 //go:embed templates
 var templateFS embed.FS
@@ -30,7 +26,13 @@ func NewScriptsGenerator() *ScriptsGenerator {
 }
 
 // Generate implements the Generator interface
-func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string) error {
+func (g *ScriptsGenerator) Generate(ctx context.Context, cfg *config.NetworkConfig, outputDir string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// 1. Generate scripts that go into network/scripts/
 	scriptFiles := map[string]string{
 		"envVar.sh.tmpl":        "scripts/envVar.sh",
@@ -44,7 +46,12 @@ func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string)
 	}
 
 	for tmplName, fileName := range scriptFiles {
-		err := g.generateFile(cfg, tmplName, filepath.Join(outputDir, fileName))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		err := g.generateFile(ctx, cfg, tmplName, filepath.Join(outputDir, fileName), 0700)
 		if err != nil {
 			return err
 		}
@@ -54,11 +61,22 @@ func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string)
 	rootFiles := map[string]string{
 		"network.sh.tmpl":     "network.sh",
 		"network.config.tmpl": "network.config",
+		"setOrgEnv.sh.tmpl":     "setOrgEnv.sh",
+		"monitordocker.sh.tmpl": "monitordocker.sh",
 	}
 
 	for tmplName, fileName := range rootFiles {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		destPath := filepath.Join(outputDir, fileName)
-		err := g.generateFile(cfg, tmplName, destPath)
+		perm := os.FileMode(0700)
+		if fileName == "network.config" {
+			perm = 0600
+		}
+		err := g.generateFile(ctx, cfg, tmplName, destPath, perm)
 		if err != nil {
 			return err
 		}
@@ -74,18 +92,10 @@ func (g *ScriptsGenerator) Generate(cfg *config.NetworkConfig, outputDir string)
 	if err != nil {
 		return fmt.Errorf("failed to merge env file: %w", err)
 	}
-	err = os.WriteFile(envPath, mergedEnv, 0600)
-	if err != nil {
+
+	if err := config.WriteFileAtomic(envPath, mergedEnv, 0600); err != nil {
 		return fmt.Errorf("failed to write .env file: %w", err)
 	}
-	fmt.Printf("Generated %s\n", envPath)
-
-	fmt.Println()
-	fmt.Println("⚠️  SECURITY REMINDER: The generated .env file contains WEAK DEFAULT credentials.")
-	fmt.Println("   Rotate ALL passwords before deploying to any shared or production environment.")
-	fmt.Println("   See the warning header inside network/.env for details.")
-	fmt.Println()
-
 	return nil
 }
 
@@ -102,23 +112,22 @@ func (g *ScriptsGenerator) executeTemplate(cfg *config.NetworkConfig, tmplName s
 	return buf.Bytes(), nil
 }
 
-func (g *ScriptsGenerator) generateFile(cfg *config.NetworkConfig, tmplName, destPath string) error {
+func (g *ScriptsGenerator) generateFile(ctx context.Context, cfg *config.NetworkConfig, tmplName, destPath string, perm os.FileMode) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	content, err := g.executeTemplate(cfg, tmplName)
 	if err != nil {
 		return err
 	}
 
-	err = os.MkdirAll(filepath.Dir(destPath), 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create directory for %s: %w", destPath, err)
-	}
-
-	err = os.WriteFile(destPath, content, 0755)
-	if err != nil {
+	if err := config.WriteFileAtomic(destPath, content, perm); err != nil {
 		return fmt.Errorf("failed to write file %s: %w", destPath, err)
 	}
 
-	fmt.Printf("Generated %s\n", destPath)
 	return nil
 }
 
@@ -175,3 +184,4 @@ func (g *ScriptsGenerator) mergeEnvFile(newContent []byte, destPath string) ([]b
 
 	return existingBytes, nil
 }
+

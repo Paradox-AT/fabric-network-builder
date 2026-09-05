@@ -32,11 +32,13 @@ ORG_NAME_CORRECT=$(getOrgName "${ORG_INDEX}")
 ORG_DIR=$(getOrgDir "${ORG_INDEX}")
 ORG_DOMAIN=$(getOrgDomain "${ORG_INDEX}")
 
-infoln "Onboarding organization: ${ORG_NAME_CORRECT} (${ORG_DOMAIN}) to channel: ${CHANNEL_NAME}"
+headerln "Onboarding Organization: ${ORG_NAME_CORRECT} (${ORG_DOMAIN}) to Channel '${CHANNEL_NAME}'"
 
 # ----------------------------------------------------------------------
 # 1. Generate Crypto Material for New Org (if not already existing)
 # ----------------------------------------------------------------------
+sectionln "1. Generating Crypto Material for ${ORG_NAME_CORRECT}"
+
 if [ "${CRYPTO}" == "Fabric CA" ]; then
   CA_EXISTS=true
   if [ ! -f "${ROOTDIR}/organizations/${ORG_DIR}/ca/ca-cert.pem" ]; then
@@ -44,7 +46,7 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
   fi
 
   if [ "${CA_EXISTS}" = "false" ]; then
-    infoln "Starting Certificate Authority for ${ORG_NAME_CORRECT}..."
+    task_start "Starting Certificate Authority for ${ORG_NAME_CORRECT}"
     {{- range $i, $org := .Orgs }}
     if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
       {{- if eq $.CADatabaseType "postgres" }}
@@ -55,7 +57,6 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
     fi
     {{- end }}
 
-    infoln "Waiting for ${ORG_NAME_CORRECT}'s CA to be ready..."
     mkdir -p "${ROOTDIR}/organizations/${ORG_DIR}/ca"
 
     COUNTER=0
@@ -83,6 +84,7 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
       fi
       COUNTER=$((COUNTER + 1))
     done
+    task_done
   fi
 
   msp_exists=false
@@ -101,12 +103,12 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
   {{- end }}
 
   if [ "${msp_exists}" = "false" ]; then
-    infoln "Enrolling identities for ${ORG_NAME_CORRECT}..."
     . ${ROOTDIR}/organizations/${ORG_DIR}/scripts/registerEnroll.sh
     # Restore ORG_DIR to its correct value since registerEnroll.sh pollutes it
     ORG_DIR=$(getOrgDir "${ORG_INDEX}")
   else
-    infoln "Identities for ${ORG_NAME_CORRECT} already exist. Skipping enrollment."
+    task_start "Enrolling identities and certificates for ${ORG_NAME_CORRECT}"
+    task_done "already exists"
   fi
 else
   # Using cryptogen
@@ -126,8 +128,8 @@ else
   {{- end }}
 
   if [ "${crypto_exists}" = "false" ]; then
-    infoln "Generating crypto material for ${ORG_NAME_CORRECT} using cryptogen..."
-    run_verbose cryptogen generate --config=${ROOTDIR}/organizations/${ORG_DIR}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/${ORG_DIR}/identities"
+    task_start "Generating crypto material for ${ORG_NAME_CORRECT} using cryptogen"
+    run_verbose cryptogen generate --config=${ROOTDIR}/organizations/${ORG_DIR}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/${ORG_DIR}/identities" || { task_fail; fatalln "Cryptogen generation failed"; }
 
     # Flatten cryptogen output
     if [ -d "${ROOTDIR}/organizations/${ORG_DIR}/identities/peerOrganizations" ]; then
@@ -142,21 +144,33 @@ else
       rm -rf ${ROOTDIR}/organizations/${ORG_DIR}/identities/ordererOrganizations
       find ${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
     fi
+    task_done
   else
-    infoln "Crypto material already exists for ${ORG_NAME_CORRECT}. Skipping cryptogen generation."
+    task_start "Generating crypto material for ${ORG_NAME_CORRECT} using cryptogen"
+    task_done "already exists"
   fi
+fi
+
+# Generate Client Connection Profile for the new organization
+if [ -f "${ROOTDIR}/organizations/ccp-generate.sh" ] && verifyPeerOrg "${ORG_INDEX}"; then
+  task_start "Generating Client Connection Profile for ${ORG_NAME_CORRECT}"
+  "${ROOTDIR}/organizations/ccp-generate.sh" "${ORG_INDEX}" "true"
+  task_done
 fi
 
 # ----------------------------------------------------------------------
 # 2. Export Org Definition JSON
 # ----------------------------------------------------------------------
-infoln "Exporting organization definition JSON for ${ORG_NAME_CORRECT}..."
+sectionln "2. Exporting Organization Definition"
+task_start "Exporting organization definition JSON for ${ORG_NAME_CORRECT}"
 mkdir -p "${ROOTDIR}/channel-artifacts"
-run_verbose bash -c "FABRIC_CFG_PATH=${FABRIC_CFG_PATH_ORDERER} configtxgen -printOrg ${ORG_NAME_CORRECT} > ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}.json"
+run_verbose bash -c "FABRIC_CFG_PATH=${FABRIC_CFG_PATH_ORDERER} configtxgen -printOrg ${ORG_NAME_CORRECT} > ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}.json" || { task_fail; fatalln "configtxgen printOrg failed"; }
+task_done
 
 # ----------------------------------------------------------------------
 # 3. Channel Configuration Update
 # ----------------------------------------------------------------------
+sectionln "3. Updating Channel Configuration"
 {{- $foundFirstOrg := false }}
 {{- $firstOrgIndex := 1 }}
 {{- range $i, $org := .Orgs }}
@@ -170,14 +184,11 @@ ESTABLISHED_ORG_INDEX={{ $firstOrgIndex }}
 export FABRIC_CFG_PATH="${FABRIC_CFG_PATH_PEER}"
 setGlobals ${ESTABLISHED_ORG_INDEX}
 
-infoln "Fetching channel config block from channel '${CHANNEL_NAME}'..."
-run_verbose peer channel fetch config ${ROOTDIR}/channel-artifacts/config_block.pb -o ${ORDERER_ADDRESS} -c ${CHANNEL_NAME} --tls --cafile ${ORDERER_CA}
-
-infoln "Decoding channel configuration block..."
-run_verbose configtxlator proto_decode --input ${ROOTDIR}/channel-artifacts/config_block.pb --type common.Block --output ${ROOTDIR}/channel-artifacts/config_block.json
-
-infoln "Extracting config JSON payload..."
+task_start "Fetching and decoding channel configuration block"
+run_verbose peer channel fetch config ${ROOTDIR}/channel-artifacts/config_block.pb -o ${ORDERER_ADDRESS} -c ${CHANNEL_NAME} --tls --cafile ${ORDERER_CA} || { task_fail; fatalln "Fetch config block failed"; }
+run_verbose configtxlator proto_decode --input ${ROOTDIR}/channel-artifacts/config_block.pb --type common.Block --output ${ROOTDIR}/channel-artifacts/config_block.json || { task_fail; fatalln "Decode config block failed"; }
 jq .data.data[0].payload.data.config ${ROOTDIR}/channel-artifacts/config_block.json > ${ROOTDIR}/channel-artifacts/config.json
+task_done
 
 setGlobals ${ORG_INDEX}
 NEW_ORG_MSPID="${CORE_PEER_LOCALMSPID}"
@@ -189,56 +200,50 @@ cp ${ROOTDIR}/channel-artifacts/config.json ${ROOTDIR}/channel-artifacts/working
 # If new org has peers, add to Application group
 HAS_PEERS=false
 {{- range $i, $org := .Orgs }}
+{{- if gt .PeerCount 0 }}
 if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
-  {{- if gt .PeerCount 0 }}
   HAS_PEERS=true
-  {{- end }}
 fi
+{{- end }}
 {{- end }}
 
 if [ "${HAS_PEERS}" = "true" ]; then
-  infoln "Injecting ${ORG_NAME_CORRECT} into Application group..."
-  # Application OrgGroup schema does not accept "Endpoints"
+  task_start "Injecting ${ORG_NAME_CORRECT} into Application group"
   jq 'del(.values.Endpoints)' ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}.json > ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}_app.json
   jq -s ".[0] * {\"channel_group\":{\"groups\":{\"Application\":{\"groups\":{\"${NEW_ORG_MSPID}\":.[1]}}}}}" ${ROOTDIR}/channel-artifacts/working_config.json ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}_app.json > ${ROOTDIR}/channel-artifacts/next_config.json
   mv ${ROOTDIR}/channel-artifacts/next_config.json ${ROOTDIR}/channel-artifacts/working_config.json
+  task_done
 fi
 
 # If new org has orderers, add to Orderer group and configure consensus
 HAS_ORDERERS=false
 {{- range $i, $org := .Orgs }}
+{{- if gt .OrdererCount 0 }}
 if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
-  {{- if gt .OrdererCount 0 }}
   HAS_ORDERERS=true
-  {{- end }}
 fi
+{{- end }}
 {{- end }}
 
 if [ "${HAS_ORDERERS}" = "true" ]; then
-  infoln "Injecting ${ORG_NAME_CORRECT} into Orderer group..."
-  # Orderer OrgGroup schema does not accept "AnchorPeers"
+  task_start "Injecting ${ORG_NAME_CORRECT} into Orderer group"
   jq 'del(.values.AnchorPeers)' ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}.json > ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}_ord.json
   jq -s ".[0] * {\"channel_group\":{\"groups\":{\"Orderer\":{\"groups\":{\"${NEW_ORG_MSPID}\":.[1]}}}}}" ${ROOTDIR}/channel-artifacts/working_config.json ${ROOTDIR}/channel-artifacts/${ORG_NAME_CORRECT}_ord.json > ${ROOTDIR}/channel-artifacts/next_config.json
   mv ${ROOTDIR}/channel-artifacts/next_config.json ${ROOTDIR}/channel-artifacts/working_config.json
 
-  infoln "Injecting orderer consenter(s) and addresses into channel configuration..."
   CONSENSUS_TYPE=$(jq -r '.channel_group.groups.Orderer.values.ConsensusType.value.type' ${ROOTDIR}/channel-artifacts/working_config.json)
-  infoln "Detected consensus type: ${CONSENSUS_TYPE}"
 
   {{- range $i, $org := .Orgs }}
+  {{- if gt .OrdererCount 0 }}
   if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
     {{- range $j, $orderer := until .OrdererCount }}
-    # Get base64-encoded TLS cert
     CLIENT_TLS_CERT=$(cat ${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.crt | base64 | tr -d '\n')
     SERVER_TLS_CERT=$(cat ${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.crt | base64 | tr -d '\n')
 
-    # 2. Add consenter
     if [ "${CONSENSUS_TYPE}" = "etcdraft" ]; then
-      # 1. Add orderer address
       jq ".channel_group.values.OrdererAddresses.value.addresses += [\"orderer{{$j}}.${ORG_DOMAIN}:7050\"]" ${ROOTDIR}/channel-artifacts/working_config.json > ${ROOTDIR}/channel-artifacts/next_config.json
       mv ${ROOTDIR}/channel-artifacts/next_config.json ${ROOTDIR}/channel-artifacts/working_config.json
 
-      # Construct Raft consenter JSON
       NEW_CONSER=$(jq -n \
         --arg host "orderer{{$j}}.${ORG_DOMAIN}" \
         --arg port 7050 \
@@ -249,13 +254,9 @@ if [ "${HAS_ORDERERS}" = "true" ]; then
       jq ".channel_group.groups.Orderer.values.ConsensusType.value.metadata.consenters += [$NEW_CONSER]" ${ROOTDIR}/channel-artifacts/working_config.json > ${ROOTDIR}/channel-artifacts/next_config.json
       mv ${ROOTDIR}/channel-artifacts/next_config.json ${ROOTDIR}/channel-artifacts/working_config.json
     elif [ "${CONSENSUS_TYPE}" = "BFT" ]; then
-      # Get base64-encoded signing/identity cert
       IDENTITY_CERT=$(cat ${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/msp/signcerts/cert.pem | base64 | tr -d '\n')
-
-      # Determine BFT next numeric ID
       NEXT_ID=$(jq '.channel_group.groups.Orderer.values.Orderers.value.consenter_mapping | length + 1' ${ROOTDIR}/channel-artifacts/working_config.json)
 
-      # Construct BFT consenter JSON
       NEW_CONSER=$(jq -n \
         --argjson id "${NEXT_ID}" \
         --arg host "orderer{{$j}}.${ORG_DOMAIN}" \
@@ -272,10 +273,12 @@ if [ "${HAS_ORDERERS}" = "true" ]; then
     {{- end }}
   fi
   {{- end }}
+  {{- end }}
+  task_done
 fi
 
 if [ "${HAS_ORDERERS}" = "true" ] && [ "${CONSENSUS_TYPE}" = "BFT" ]; then
-  infoln "Updating BFT BlockValidation policy based on updated consenters..."
+  task_start "Updating BFT BlockValidation policy based on updated consenters"
   jq '
     .channel_group.groups.Orderer.values.Orderers.value.consenter_mapping as $consenters |
     ($consenters | length) as $N |
@@ -301,111 +304,105 @@ if [ "${HAS_ORDERERS}" = "true" ] && [ "${CONSENSUS_TYPE}" = "BFT" ]; then
     }
   ' ${ROOTDIR}/channel-artifacts/working_config.json > ${ROOTDIR}/channel-artifacts/next_config.json
   mv ${ROOTDIR}/channel-artifacts/next_config.json ${ROOTDIR}/channel-artifacts/working_config.json
+  task_done
 fi
 
 cp ${ROOTDIR}/channel-artifacts/working_config.json ${ROOTDIR}/channel-artifacts/modified_config.json
 
-infoln "Encoding original and modified configuration..."
-run_verbose configtxlator proto_encode --input ${ROOTDIR}/channel-artifacts/config.json --type common.Config --output ${ROOTDIR}/channel-artifacts/config.pb
-run_verbose configtxlator proto_encode --input ${ROOTDIR}/channel-artifacts/modified_config.json --type common.Config --output ${ROOTDIR}/channel-artifacts/modified_config.pb
-
-infoln "Computing configuration update delta..."
-run_verbose configtxlator compute_update --channel_id ${CHANNEL_NAME} --original ${ROOTDIR}/channel-artifacts/config.pb --updated ${ROOTDIR}/channel-artifacts/modified_config.pb --output ${ROOTDIR}/channel-artifacts/config_update.pb
-
-infoln "Decoding configuration update..."
-run_verbose configtxlator proto_decode --input ${ROOTDIR}/channel-artifacts/config_update.pb --type common.ConfigUpdate --output ${ROOTDIR}/channel-artifacts/config_update.json
-
-infoln "Wrapping configuration update in envelope..."
+task_start "Computing and encoding channel configuration update"
+run_verbose configtxlator proto_encode --input ${ROOTDIR}/channel-artifacts/config.json --type common.Config --output ${ROOTDIR}/channel-artifacts/config.pb || { task_fail; fatalln "Proto encode config.json failed"; }
+run_verbose configtxlator proto_encode --input ${ROOTDIR}/channel-artifacts/modified_config.json --type common.Config --output ${ROOTDIR}/channel-artifacts/modified_config.pb || { task_fail; fatalln "Proto encode modified_config.json failed"; }
+run_verbose configtxlator compute_update --channel_id ${CHANNEL_NAME} --original ${ROOTDIR}/channel-artifacts/config.pb --updated ${ROOTDIR}/channel-artifacts/modified_config.pb --output ${ROOTDIR}/channel-artifacts/config_update.pb || { task_fail; fatalln "Compute update failed"; }
+run_verbose configtxlator proto_decode --input ${ROOTDIR}/channel-artifacts/config_update.pb --type common.ConfigUpdate --output ${ROOTDIR}/channel-artifacts/config_update.json || { task_fail; fatalln "Proto decode config_update failed"; }
 echo "{\"payload\":{\"header\":{\"channel_header\":{\"channel_id\":\"${CHANNEL_NAME}\", \"type\":2}},\"data\":{\"config_update\":$(cat ${ROOTDIR}/channel-artifacts/config_update.json)}}}" | jq . > ${ROOTDIR}/channel-artifacts/config_update_in_envelope.json
+run_verbose configtxlator proto_encode --input ${ROOTDIR}/channel-artifacts/config_update_in_envelope.json --type common.Envelope --output ${ROOTDIR}/channel-artifacts/config_update_in_envelope.pb || { task_fail; fatalln "Proto encode envelope failed"; }
+task_done
 
-infoln "Encoding configuration update envelope..."
-run_verbose configtxlator proto_encode --input ${ROOTDIR}/channel-artifacts/config_update_in_envelope.json --type common.Envelope --output ${ROOTDIR}/channel-artifacts/config_update_in_envelope.pb
-
-# Sign with all other existing organizations (peers or orderers)
+# Sign with all other existing organizations
+task_start "Signing channel configuration update with existing organizations"
 {{- range $i, $org := .Orgs }}
   {{- if and (or (gt .PeerCount 0) (gt .OrdererCount 0)) (ne (inc $i) $firstOrgIndex) }}
 if [ "${ORG_INDEX}" -ne {{ inc $i }} ]; then
-  infoln "Signing configuration update with {{ .Name }} admin credentials..."
   setGlobals {{ inc $i }}
-  run_verbose peer channel signconfigtx -f ${ROOTDIR}/channel-artifacts/config_update_in_envelope.pb
+  run_verbose peer channel signconfigtx -f ${ROOTDIR}/channel-artifacts/config_update_in_envelope.pb || { task_fail; fatalln "Signing by {{ .Name }} failed"; }
 fi
   {{- end }}
 {{- end }}
+task_done
 
-# Submit update transaction with first organization
-infoln "Submitting channel configuration update transaction..."
+task_start "Submitting channel configuration update transaction"
 setGlobals ${ESTABLISHED_ORG_INDEX}
-run_verbose peer channel update -f ${ROOTDIR}/channel-artifacts/config_update_in_envelope.pb -c ${CHANNEL_NAME} -o ${ORDERER_ADDRESS} --tls --cafile ${ORDERER_CA}
+run_verbose peer channel update -f ${ROOTDIR}/channel-artifacts/config_update_in_envelope.pb -c ${CHANNEL_NAME} -o ${ORDERER_ADDRESS} --tls --cafile ${ORDERER_CA} || { task_fail; fatalln "Peer channel update failed"; }
+task_done
 
 # ----------------------------------------------------------------------
-# 4. Launch Infrastructure (if not already running)
+# 4. Launch Infrastructure
 # ----------------------------------------------------------------------
-infoln "Starting peer and orderer containers for ${ORG_NAME_CORRECT} (if not already up)..."
-run_verbose container_compose -f ${ROOTDIR}/compose/docker-compose.yaml up -d
+sectionln "4. Starting Docker Containers for ${ORG_NAME_CORRECT}"
+task_start "Starting peer and orderer containers"
+run_verbose container_compose -f ${ROOTDIR}/compose/docker-compose.yaml up -d || { task_fail; fatalln "Starting containers failed"; }
+task_done
 
 # ----------------------------------------------------------------------
 # 5. Join Channel
 # ----------------------------------------------------------------------
-infoln "Fetching channel genesis block..."
+sectionln "5. Joining Channel '${CHANNEL_NAME}'"
+task_start "Fetching channel genesis block"
 setGlobals ${ESTABLISHED_ORG_INDEX}
-run_verbose peer channel fetch 0 ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block -o ${ORDERER_ADDRESS} -c ${CHANNEL_NAME} --tls --cafile ${ORDERER_CA}
+run_verbose peer channel fetch 0 ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block -o ${ORDERER_ADDRESS} -c ${CHANNEL_NAME} --tls --cafile ${ORDERER_CA} || { task_fail; fatalln "Fetch channel block failed"; }
+task_done
 
 # Join peers
 if [ "${HAS_PEERS}" = "true" ]; then
+  task_start "Joining peers of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'"
   {{- range $i, $org := .Orgs }}
+  {{- if gt .PeerCount 0 }}
   if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
     {{- range $j, $p := until .PeerCount }}
     setGlobals ${ORG_INDEX} {{ $j }}
-    infoln "Checking if peer{{ $j }} of ${ORG_NAME_CORRECT} is already on channel '${CHANNEL_NAME}'..."
-    if peer channel list 2>/dev/null | grep -q "^${CHANNEL_NAME}$"; then
-      warnln "Peer{{ $j }} of ${ORG_NAME_CORRECT} is already joined to '${CHANNEL_NAME}'. Skipping."
-    else
-      infoln "Joining peer{{ $j }} of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'..."
-      run_verbose peer channel join -b ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block
+    if ! peer channel list 2>/dev/null | grep -q "^${CHANNEL_NAME}$"; then
+      run_verbose peer channel join -b ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block || { task_fail; fatalln "Peer{{ $j }} join failed"; }
     fi
     {{- end }}
   fi
   {{- end }}
+  {{- end }}
+  task_done
 fi
 
 # Join orderers using osnadmin
 if [ "${HAS_ORDERERS}" = "true" ]; then
+  task_start "Joining orderers of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'"
   {{- range $i, $org := .Orgs }}
+  {{- if gt .OrdererCount 0 }}
   if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
     {{- range $j, $orderer := until .OrdererCount }}
-    infoln "Checking if orderer{{ $j }} of ${ORG_NAME_CORRECT} is already on channel '${CHANNEL_NAME}'..."
-    if osnadmin channel list \
+    if ! osnadmin channel list \
       -o localhost:{{ calculateOrdererPort $i $j 7053 }} \
       --ca-file "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/tlsca/tlsca.${ORG_DOMAIN}-cert.pem" \
       --client-cert "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.crt" \
       --client-key "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.key" \
       2>/dev/null | grep -q "\"${CHANNEL_NAME}\""; then
-      warnln "Orderer orderer{{ $j }} of ${ORG_NAME_CORRECT} is already joined to '${CHANNEL_NAME}'. Skipping."
-    else
-      infoln "Joining orderer{{ $j }} of ${ORG_NAME_CORRECT} to channel '${CHANNEL_NAME}'..."
       run_verbose osnadmin channel join \
         --channelID ${CHANNEL_NAME} \
         --config-block ${ROOTDIR}/channel-artifacts/${CHANNEL_NAME}.block \
         -o localhost:{{ calculateOrdererPort $i $j 7053 }} \
         --ca-file "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/tlsca/tlsca.${ORG_DOMAIN}-cert.pem" \
         --client-cert "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.crt" \
-        --client-key "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.key"
+        --client-key "${ROOTDIR}/organizations/${ORG_DIR}/identities/orderer/orderers/orderer{{$j}}.${ORG_DOMAIN}/tls/server.key" || { task_fail; fatalln "Orderer{{ $j }} join failed"; }
     fi
     {{- end }}
   fi
   {{- end }}
+  {{- end }}
+  task_done
 fi
 
 # ----------------------------------------------------------------------
-# 6. Anchor Peer Update (enables cross-org communication)
-# ----------------------------------------------------------------------
-infoln "Anchor peers updated automatically via injected organization definition."
-
-# ----------------------------------------------------------------------
-# 7. Chaincode Onboarding
+# 6. Chaincode Onboarding
 # ----------------------------------------------------------------------
 if [ "${HAS_PEERS}" = "true" ]; then
-  infoln "Checking for committed chaincodes on channel '${CHANNEL_NAME}'..."
+  sectionln "6. Onboarding Existing Chaincodes"
   setGlobals ${ESTABLISHED_ORG_INDEX}
   COMMITTED_CCS=$(peer lifecycle chaincode querycommitted -C ${CHANNEL_NAME} -o ${ORDERER_ADDRESS} --tls --cafile ${ORDERER_CA} --output json 2>/dev/null || true)
 
@@ -415,47 +412,40 @@ if [ "${HAS_PEERS}" = "true" ]; then
       CC_VERSION=$(echo "$cc" | jq -r '.version')
       CC_SEQUENCE=$(echo "$cc" | jq -r '.sequence')
 
-      infoln "Found committed chaincode: ${CC_NAME} (version: ${CC_VERSION}, sequence: ${CC_SEQUENCE})"
-
       PKG_PATH="${ROOTDIR}/channel-artifacts/packagedChaincode/${CC_NAME}_${CC_VERSION}.tar.gz"
       if [ -f "${PKG_PATH}" ]; then
+        task_start "Onboarding chaincode ${CC_NAME} (v${CC_VERSION}, seq ${CC_SEQUENCE}) for ${ORG_NAME_CORRECT}"
         export FABRIC_CFG_PATH="${FABRIC_CFG_PATH_PEER}"
         PKG_ID=$(peer lifecycle chaincode calculatepackageid "${PKG_PATH}" 2>/dev/null || true)
 
         {{- range $i, $org := .Orgs }}
+        {{- if gt .PeerCount 0 }}
         if [ "${ORG_INDEX}" -eq {{ inc $i }} ]; then
           {{- range $j, $p := until .PeerCount }}
           setGlobals ${ORG_INDEX} {{ $j }}
-          infoln "Checking if chaincode ${CC_NAME} is already installed on peer{{ $j }} of ${ORG_NAME_CORRECT}..."
           if ! peer lifecycle chaincode queryinstalled --output json 2>/dev/null | jq -r 'try (.installed_chaincodes[].package_id)' | grep -q "^${PKG_ID}$"; then
-            infoln "Installing chaincode ${CC_NAME} on peer{{ $j }} of ${ORG_NAME_CORRECT}..."
-            run_verbose peer lifecycle chaincode install "${PKG_PATH}"
-          else
-            warnln "Chaincode ${CC_NAME} is already installed on peer{{ $j }} of ${ORG_NAME_CORRECT}. Skipping."
+            run_verbose peer lifecycle chaincode install "${PKG_PATH}" || { task_fail; fatalln "Install failed on peer{{ $j }}"; }
           fi
           {{- end }}
         fi
         {{- end }}
+        {{- end }}
 
         if [ -n "${PKG_ID}" ]; then
-          infoln "Approving chaincode ${CC_NAME} for ${ORG_NAME_CORRECT}..."
           setGlobals ${ORG_INDEX}
-
           INIT_REQUIRED=""
           if [ "$(echo "$cc" | jq -r '.init_required // empty')" = "true" ]; then
             INIT_REQUIRED="--init-required"
           fi
 
-          # Approve definition for my org
-          run_verbose peer lifecycle chaincode approveformyorg -o "${ORDERER_ADDRESS}" --tls --cafile "${ORDERER_CA}" --channelID "${CHANNEL_NAME}" --name "${CC_NAME}" --version "${CC_VERSION}" --package-id "${PKG_ID}" --sequence "${CC_SEQUENCE}" ${INIT_REQUIRED}
+          run_verbose peer lifecycle chaincode approveformyorg -o "${ORDERER_ADDRESS}" --tls --cafile "${ORDERER_CA}" --channelID "${CHANNEL_NAME}" --name "${CC_NAME}" --version "${CC_VERSION}" --package-id "${PKG_ID}" --sequence "${CC_SEQUENCE}" ${INIT_REQUIRED} || { task_fail; fatalln "Approve failed"; }
         fi
+        task_done
       else
         warnln "Packaged chaincode not found at ${PKG_PATH}. Skipping chaincode onboarding."
       fi
     done
-  else
-    infoln "No active chaincodes found on channel '${CHANNEL_NAME}' to onboard."
   fi
 fi
 
-successln "Organization ${ORG_NAME_CORRECT} successfully joined channel '${CHANNEL_NAME}'!"
+successln "Organization ${ORG_NAME_CORRECT} successfully onboarded to '${CHANNEL_NAME}'."

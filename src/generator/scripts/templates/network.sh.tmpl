@@ -34,6 +34,7 @@ fi
 
 . "${ROOTDIR}/network.config"
 . "${ROOTDIR}/scripts/utils.sh"
+. "${ROOTDIR}/scripts/envVar.sh"
 
 # Source .env only once per shell session. The _FABRIC_ENV_LOADED guard prevents
 # "readonly variable" errors when network.sh is re-invoked in the same shell or
@@ -54,26 +55,44 @@ export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
 
 # Obtain CONTAINER_IDS and remove them
 function clearContainers() {
-  infoln "Removing remaining containers for project: ${COMPOSE_PROJECT_NAME}"
-  "${CONTAINER_CLI}" rm -f $("${CONTAINER_CLI}" ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}") 2>/dev/null || true
-  infoln "Removing leftover chaincode containers"
-  "${CONTAINER_CLI}" rm -f $("${CONTAINER_CLI}" ps -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
+  task_start "Removing leftover containers for project '${COMPOSE_PROJECT_NAME}'"
+  local c_ids
+  c_ids=$("${CONTAINER_CLI}" ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" 2>/dev/null || true)
+  if [ -n "$c_ids" ]; then
+    "${CONTAINER_CLI}" rm -f $c_ids >/dev/null 2>&1 || true
+  fi
+  local cc_ids
+  cc_ids=$("${CONTAINER_CLI}" ps -aq --filter "label=org.hyperledger.fabric.chaincode.type" 2>/dev/null || true)
+  if [ -n "$cc_ids" ]; then
+    "${CONTAINER_CLI}" rm -f $cc_ids >/dev/null 2>&1 || true
+  fi
+  task_done
 }
 
 # Delete chaincode docker images
 function removeChaincodeImages() {
-  infoln "Removing leftover chaincode images"
-  "${CONTAINER_CLI}" rmi -f $("${CONTAINER_CLI}" images -aq --filter "label=org.hyperledger.fabric.chaincode.type") 2>/dev/null || true
+  task_start "Removing leftover chaincode Docker images"
+  local img_ids
+  img_ids=$("${CONTAINER_CLI}" images -aq --filter "label=org.hyperledger.fabric.chaincode.type" 2>/dev/null || true)
+  if [ -n "$img_ids" ]; then
+    "${CONTAINER_CLI}" rmi -f $img_ids >/dev/null 2>&1 || true
+  fi
+  task_done
 }
 
 function bootstrap() {
-  infoln "Initializing Fabric binaries and images"
+  headerln "Bootstrapping Fabric Binaries and Container Images"
   ${ROOTDIR}/scripts/bootstrap.sh
 }
 
 # Check if required binaries and config files exist, auto-bootstrap if missing
 function checkBinaries() {
   local missing=false
+
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    sectionln "Pre-Flight Dependency & Binary Check"
+  fi
+
   local BINS="peer orderer configtxgen cryptogen"
   if [ "${CRYPTO}" == "Fabric CA" ]; then
     BINS="${BINS} fabric-ca-client"
@@ -83,6 +102,8 @@ function checkBinaries() {
     if [ ! -f "${ROOTDIR}/bin/${bin}" ]; then
       warnln "Binary '${bin}' not found in ${ROOTDIR}/bin/"
       missing=true
+    elif [ "${VERBOSE:-false}" = "true" ]; then
+      task_successln "Found binary: ${bin}"
     fi
   done
 
@@ -90,6 +111,8 @@ function checkBinaries() {
   if [ ! -f "${ROOTDIR}/config/core.yaml" ]; then
     warnln "config/core.yaml not found — Fabric config files are missing"
     missing=true
+  elif [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "Found config: config/core.yaml"
   fi
 
   # Check host system dependencies required at runtime
@@ -114,7 +137,7 @@ function checkBinaries() {
       read -p "One or more binaries or config files are missing. Would you like to run bootstrap to download them? [y/N]: " answer
       case "$answer" in
         [yY]|[yY][eE][sS])
-          infoln "Running bootstrap..."
+          infoln "Running bootstrap"
           bootstrap
           ;;
         *)
@@ -122,14 +145,13 @@ function checkBinaries() {
           ;;
       esac
     else
-      infoln "One or more binaries or config files are missing. Running bootstrap (non-interactive)..."
+      infoln "One or more binaries or config files are missing. Running bootstrap (non-interactive)"
       bootstrap
     fi
   else
-    # 2. Check for version mismatches
+    # Check for version mismatches
     local version_mismatch=false
 
-    # Check Fabric version
     set +e
     CURRENT_VER=$("${ROOTDIR}/bin/peer" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
     set -e
@@ -138,7 +160,6 @@ function checkBinaries() {
       version_mismatch=true
     fi
 
-    # Check CA version if applicable
     if [ "${CRYPTO}" == "Fabric CA" ]; then
       set +e
       CURRENT_CA_VER=$("${ROOTDIR}/bin/fabric-ca-client" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
@@ -150,14 +171,16 @@ function checkBinaries() {
     fi
 
     if [ "$version_mismatch" = true ]; then
-      warnln "It is highly recommended to run './network/network.sh bootstrap' to sync your binaries."
-    else
-      infoln "All required binaries and config files found (v${FABRIC_VERSION})."
+      warnln "It is highly recommended to run './network.sh bootstrap' to sync your binaries."
+    elif [ "${VERBOSE:-false}" = "true" ]; then
+      successln "All required binaries and config files validated (Fabric v${FABRIC_VERSION})."
     fi
   fi
 }
 
 function networkUp() {
+  headerln "Starting Hyperledger Fabric Network: ${NETWORK_NAME:-{{ .NetworkName }}}"
+
   # 1. Pre-flight check: ensure binaries are present
   checkBinaries
 
@@ -180,65 +203,64 @@ function networkUp() {
     generateCerts
   fi
 
-  if [ "${VERBOSE:-false}" = "true" ]; then
-    container_compose -f "${COMPOSE_FILE_BASE}" up -d 2>&1 | tee log.txt
-    res=${PIPESTATUS[0]}
-    if [ $res -ne 0 ]; then
-      fatalln "Unable to start network"
-    fi
-    "${CONTAINER_CLI}" ps -a
+  sectionln "Deploying Network Infrastructure"
+  if checkNetworkContainersUp quiet 2>/dev/null; then
+    infoln "All peer and orderer containers are already up and running"
   else
-    container_compose -f "${COMPOSE_FILE_BASE}" up -d >&log.txt
-    res=$?
-    if [ $res -ne 0 ]; then
-      cat log.txt
-      fatalln "Unable to start network"
-    fi
+    run_task "Starting peer and orderer containers" container_compose -f "${COMPOSE_FILE_BASE}" up -d
   fi
 
   # Start utility services (pgAdmin) if the config exists and -u/--utility is passed
   if [ -f "${COMPOSE_FILE_UTILS}" ] && [ "${START_UTILITIES}" = "true" ]; then
-    infoln "Starting utility services (pgAdmin)"
-    if [ "${VERBOSE:-false}" = "true" ]; then
-      container_compose -f "${COMPOSE_FILE_UTILS}" up -d 2>&1 | tee -a log.txt
-      res=${PIPESTATUS[0]}
-      if [ $res -ne 0 ]; then
-        fatalln "Unable to start utility services"
-      fi
-    else
-      container_compose -f "${COMPOSE_FILE_UTILS}" up -d >>log.txt 2>&1
-      res=$?
-      if [ $res -ne 0 ]; then
-        cat log.txt
-        fatalln "Unable to start utility services"
-      fi
+    run_task "Starting utility services (pgAdmin)" container_compose -f "${COMPOSE_FILE_UTILS}" up -d
+  fi
+
+  # Generate Connection Profiles (CCP) only if newly generated or missing
+  if [ -f "${ROOTDIR}/organizations/ccp-generate.sh" ]; then
+    local missing_ccp=false
+    {{- range .Orgs }}
+    {{- if gt .PeerCount 0 }}
+    if [ ! -f "${ROOTDIR}/organizations/{{ toLower .Name }}/connection-{{ toLower .Name }}.json" ] || [ ! -f "${ROOTDIR}/organizations/{{ toLower .Name }}/connection-{{ toLower .Name }}.yaml" ]; then
+      missing_ccp=true
+    fi
+    {{- end }}
+    {{- end }}
+
+    if [ "$missing_certs" = "true" ] || [ "$missing_ccp" = "true" ]; then
+      sectionln "Generating Client Connection Profiles (CCP)"
+      run_task "Generating Client Connection Profiles" "${ROOTDIR}/organizations/ccp-generate.sh"
     fi
   fi
-  infoln "Network is up and running..!"
+
+  headerln "Hyperledger Fabric Network is UP and RUNNING!"
+  println "  ${C_BOLD_WHITE}Network Name:${C_RESET} ${NETWORK_NAME:-{{ .NetworkName }}}"
+  println "  ${C_BOLD_WHITE}Channel Name:${C_RESET} ${CHANNEL_NAME}"
+  println "  ${C_BOLD_WHITE}Crypto Type:${C_RESET}  ${CRYPTO}"
+  {{- range $i, $org := .Orgs }}
+  println "  ${C_BOLD_GREEN}Org: {{ .Name }}${C_RESET} (${C_CYAN}{{ .Domain }}${C_RESET}) - MSP: ${C_BOLD_WHITE}{{ .MSPID }}${C_RESET}"
+  {{- if gt .PeerCount 0 }}
+  println "    Peers ({{ .PeerCount }}): {{ range $j, $p := until .PeerCount }}localhost:{{ calculatePeerPort $i $j 7051 }} {{ end }}"
+  {{- end }}
+  {{- if gt .OrdererCount 0 }}
+  println "    Orderers ({{ .OrdererCount }}): {{ range $j, $o := until .OrdererCount }}localhost:{{ calculateOrdererPort $i $j 7050 }} {{ end }}"
+  {{- end }}
+  {{- end }}
+  if [ "$MODE" == "up" ]; then
+    println "\n${C_BOLD_CYAN}Next Steps:${C_RESET}"
+    println "  1. Create channel and join peers:  ${C_BOLD_WHITE}./network.sh createChannel ${CHANNEL_NAME}${C_RESET}"
+    println "  2. Deploy chaincode:               ${C_BOLD_WHITE}./network.sh deployCC -ccn <name> -ccp <path> -ccl <lang>${C_RESET}"
+    println "  3. Bring down network:             ${C_BOLD_WHITE}./network.sh down${C_RESET}\n"
+  fi
 }
 
 function generateCerts() {
   if [ "${CRYPTO}" == "Fabric CA" ]; then
-    infoln "Generating certificates using Fabric CA"
-
-    if [ "${VERBOSE:-false}" = "true" ]; then
-      container_compose -f "${COMPOSE_FILE_CA}" up -d 2>&1 | tee log.txt
-      res=${PIPESTATUS[0]}
-      if [ $res -ne 0 ]; then
-        fatalln "Unable to start Fabric CA"
-      fi
-    else
-      container_compose -f "${COMPOSE_FILE_CA}" up -d >&log.txt
-      res=$?
-      if [ $res -ne 0 ]; then
-        cat log.txt
-        fatalln "Unable to start Fabric CA"
-      fi
-    fi
+    sectionln "Generating Certificates using Fabric CA"
+    run_task "Starting Fabric CA containers" container_compose -f "${COMPOSE_FILE_CA}" up -d
 
     {{- range $i, $org := .Orgs }}
     if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/msp" ] && [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/msp" ]; then
-      infoln "Waiting for {{ .Name }}'s CA to be ready..."
+      task_start "Waiting for {{ .Name }}'s CA to be ready"
 
       # Pre-create directory for the certificate
       mkdir -p "${ROOTDIR}/organizations/{{ toLower .Name }}/ca"
@@ -263,6 +285,7 @@ function generateCerts() {
         fi
         COUNTER=$((COUNTER + 1))
       done
+      task_done
 
       # Now that CA is ready, run the full enrollment script
       . "${ROOTDIR}/organizations/{{ toLower .Name }}/scripts/registerEnroll.sh"
@@ -273,16 +296,15 @@ function generateCerts() {
   else
     which cryptogen >/dev/null 2>&1
     if [ "$?" -ne 0 ]; then
-      fatalln "cryptogen tool not found. Run './network/network.sh bootstrap' first."
+      fatalln "cryptogen tool not found. Run './network.sh bootstrap' first."
     fi
 
-    infoln "Generating certificates using cryptogen tool"
+    sectionln "Generating Certificates using cryptogen"
 
     {{- range .Orgs }}
     if [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/msp" ] && [ ! -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/msp" ]; then
-      infoln "Creating {{ .Name }} Identities"
-      debug_on
-      cryptogen generate --config=${ROOTDIR}/organizations/{{ toLower .Name }}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/{{ toLower .Name }}/identities"
+      task_start "Generating certificates for {{ .Name }} using cryptogen"
+      run_verbose cryptogen generate --config=${ROOTDIR}/organizations/{{ toLower .Name }}/identity-config/cryptogen/crypto-config.yaml --output="${ROOTDIR}/organizations/{{ toLower .Name }}/identities" || { task_fail; fatalln "Failed to generate certificates for {{ .Name }}"; }
 
       # Flatten the cryptogen output to match our Sovereign structure
       if [ -d "${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer" ]; then
@@ -300,9 +322,7 @@ function generateCerts() {
         find ${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/ -name "*cert.pem" -exec sh -c 'mv "$1" "$(dirname "$1")/cert.pem"' _ {} \;
       fi
 
-      res=$?
-      debug_off
-      verifyResult $res "Failed to generate certificates for {{ .Name }}..."
+      task_done
     else
       infoln "Crypto material already exists for {{ .Name }}. Skipping cryptogen generation."
     fi
@@ -318,12 +338,11 @@ function createChannel() {
     # Pre-flight 1: ensure all binaries are present
     checkBinaries
 
-    # 1. Check if the network is running
-    running=$(container_compose -f "${COMPOSE_FILE_BASE}" ps --status running -q 2>/dev/null)
-    if [ -z "$running" ]; then
-      warnln "Network is not running."
+    # 1. Check if all network containers are running
+    if ! checkNetworkContainersUp 2>/dev/null; then
+      warnln "Not all network containers are up and running."
       if [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
-        infoln "Starting network..."
+        infoln "Starting network"
         networkUp
       elif [ -t 0 ]; then
         read -p "Would you like to automatically spin up the network? [Yes/Always/No]: " answer
@@ -331,26 +350,28 @@ function createChannel() {
         case "$answer_lc" in
           always|a)
             PROMPT_ALWAYS=true
-            infoln "Starting network (always=true)..."
+            infoln "Starting network (always=true)"
             networkUp
             ;;
           yes|y)
-            infoln "Starting network..."
+            infoln "Starting network"
             networkUp
             ;;
           *)
-            fatalln "Network is required to create channel. Exiting."
+            fatalln "All network containers are required to create channel. Exiting."
             ;;
         esac
       else
-        fatalln "Non-interactive environment detected and network is not running. Exiting."
+        fatalln "Non-interactive environment detected and not all network containers are running. Exiting."
       fi
-    else
-      infoln "Network is already up."
+    elif [ "${VERBOSE:-false}" = "true" ]; then
+      task_successln "All peer and orderer containers are running"
     fi
 
     # 2. Check if the channel already exists
-    infoln "Checking if channel '${CHANNEL_NAME}' already exists..."
+    if [ "${VERBOSE:-false}" = "true" ]; then
+      stepln "Checking if channel '${CHANNEL_NAME}' already exists"
+    fi
     channel_exists=false
     {{- $foundFirst := false }}
     {{- range $orgIndex, $org := .Orgs }}
@@ -384,42 +405,28 @@ function createChannel() {
       infoln "Channel '${CHANNEL_NAME}' already exists. Skipping channel creation."
       exit 0
     fi
-
-    # 3. Prompt user if they want to create the channel since it does not exist
-    if [ "$auto_create" = "true" ] || [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
-      infoln "Proceeding to create channel '${CHANNEL_NAME}'..."
-    elif [ -t 0 ]; then
-      read -p "Channel '${CHANNEL_NAME}' does not exist. Would you like to create it? [yes,always,No]: " answer
-      answer_lc=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
-      case "$answer_lc" in
-        always|a)
-          PROMPT_ALWAYS=true
-          infoln "Proceeding to create channel '${CHANNEL_NAME}' (always=true)..."
-          ;;
-        yes|y)
-          infoln "Proceeding to create channel '${CHANNEL_NAME}'..."
-          ;;
-        *)
-          fatalln "Exiting without creating channel."
-          ;;
-      esac
-    else
-      infoln "Non-interactive environment detected. Proceeding to create channel '${CHANNEL_NAME}'..."
-    fi
   fi
 
-  ${ROOTDIR}/scripts/createChannel.sh "$CHANNEL_NAME" 3 5 false 0 "true" "true"
+  ${ROOTDIR}/scripts/createChannel.sh "$CHANNEL_NAME" 3 5 "${VERBOSE}" 0 "true" "true"
+
+  if [ "$MODE" == "createChannel" ]; then
+    println "\n${C_BOLD_CYAN}Next Steps:${C_RESET}"
+    println "  1. Deploy a chaincode: ${C_BOLD_WHITE}./network.sh deployCC -c ${CHANNEL_NAME} -ccn <name> -ccp <path> -ccl <go|javascript|typescript|java>${C_RESET}"
+    println "  2. Bring down network: ${C_BOLD_WHITE}./network.sh down${C_RESET}\n"
+  fi
 }
 
 function networkDown() {
-  infoln "Stopping network"
+  headerln "Shutting Down Hyperledger Fabric Network"
+
+  task_start "Stopping Docker containers"
   if [ "${VERBOSE:-false}" = "true" ]; then
-    container_compose -f "${COMPOSE_FILE_BASE}" down --volumes --remove-orphans
+    run_verbose container_compose -f "${COMPOSE_FILE_BASE}" down --volumes --remove-orphans
     if [ "${CRYPTO}" == "Fabric CA" ]; then
-      container_compose -f "${COMPOSE_FILE_CA}" down --volumes --remove-orphans
+      run_verbose container_compose -f "${COMPOSE_FILE_CA}" down --volumes --remove-orphans
     fi
     if [ -f "${COMPOSE_FILE_UTILS}" ]; then
-      container_compose -f "${COMPOSE_FILE_UTILS}" down --volumes --remove-orphans
+      run_verbose container_compose -f "${COMPOSE_FILE_UTILS}" down --volumes --remove-orphans
     fi
   else
     container_compose -f "${COMPOSE_FILE_BASE}" down --volumes --remove-orphans >/dev/null 2>&1
@@ -430,23 +437,26 @@ function networkDown() {
       container_compose -f "${COMPOSE_FILE_UTILS}" down --volumes --remove-orphans >/dev/null 2>&1
     fi
   fi
+  task_done
 
   if [ "$MODE" != "restart" ]; then
     # Bring down the network, deleting the volumes
     clearContainers
     removeChaincodeImages
 
-    infoln "Removing generated identities and artifacts"
+    task_start "Cleaning identities, certificates, and channel artifacts"
 
     # Remove channel artifacts and logs
     rm -rf ${ROOTDIR}/channel-artifacts/* ${ROOTDIR}/log.txt
 
-    # Remove organization identities and CA runtime data
+    # Remove organization identities, CA runtime data, and connection profiles (CCP)
     # We use a container to clean up to avoid permission issues with files created by Docker
     "${CONTAINER_CLI}" run --rm -v ${ROOTDIR}:/data busybox sh -c "
       cd /data && \
       {{- range .Orgs }}
-      rm -rf organizations/{{ toLower .Name }}/identities && \
+      rm -rf organizations/{{ toLower .Name }}/identities \
+             organizations/{{ toLower .Name }}/connection-{{ toLower .Name }}.json \
+             organizations/{{ toLower .Name }}/connection-{{ toLower .Name }}.yaml && \
       rm -rf organizations/{{ toLower .Name }}/ca/msp \
              organizations/{{ toLower .Name }}/ca/tls-cert.pem \
              organizations/{{ toLower .Name }}/ca/ca-cert.pem \
@@ -455,17 +465,20 @@ function networkDown() {
              organizations/{{ toLower .Name }}/ca/fabric-ca-server.db && \
       {{- end }}
       true
-    "
+    " >/dev/null 2>&1 || true
+    task_done
+    successln "Hyperledger Fabric network shut down and cleaned successfully."
   fi
 }
 
 function deployCC() {
-  # 1. Check if the network is running
-  running=$(container_compose -f "${COMPOSE_FILE_BASE}" ps --status running -q 2>/dev/null)
-  if [ -z "$running" ]; then
-    warnln "Network is not running."
+  headerln "Deploying Chaincode '${CC_NAME}' (v${CC_VERSION})"
+
+  # 1. Check if all network containers are running
+  if ! checkNetworkContainersUp 2>/dev/null; then
+    warnln "Not all network containers are up and running."
     if [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
-      infoln "Starting network..."
+      infoln "Starting network"
       networkUp
     elif [ -t 0 ]; then
       read -p "Would you like to automatically spin up the network? [Yes/Always/No]: " answer
@@ -473,26 +486,28 @@ function deployCC() {
       case "$answer_lc" in
         always|a)
           PROMPT_ALWAYS=true
-          infoln "Starting network (always=true)..."
+          infoln "Starting network (always=true)"
           networkUp
           ;;
         yes|y)
-          infoln "Starting network..."
+          infoln "Starting network"
           networkUp
           ;;
         *)
-          fatalln "Network is required to deploy chaincode. Exiting."
+          fatalln "All network containers are required to deploy chaincode. Exiting."
           ;;
       esac
     else
-      fatalln "Non-interactive environment detected and network is not running. Exiting."
+      fatalln "Non-interactive environment detected and not all network containers are running. Exiting."
     fi
-  else
-    infoln "Network is already up."
+  elif [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "All peer and orderer containers are running"
   fi
 
   # 2. Check if the channel exists
-  infoln "Checking if channel '${CHANNEL_NAME}' exists..."
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Checking if channel '${CHANNEL_NAME}' exists"
+  fi
   channel_exists=false
   {{- $foundFirst := false }}
   {{- range $orgIndex, $org := .Orgs }}
@@ -525,7 +540,7 @@ function deployCC() {
   if [ "$channel_exists" = false ]; then
     warnln "Channel '${CHANNEL_NAME}' does not exist."
     if [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
-      infoln "Creating channel '${CHANNEL_NAME}'..."
+      infoln "Creating channel '${CHANNEL_NAME}'"
       createChannel "true" "true"
     elif [ -t 0 ]; then
       read -p "Would you like to automatically create the channel '${CHANNEL_NAME}'? [Yes/Always/No]: " answer
@@ -533,11 +548,11 @@ function deployCC() {
       case "$answer_lc" in
         always|a)
           PROMPT_ALWAYS=true
-          infoln "Creating channel '${CHANNEL_NAME}' (always=true)..."
+          infoln "Creating channel '${CHANNEL_NAME}' (always=true)"
           createChannel "true" "true"
           ;;
         yes|y)
-          infoln "Creating channel '${CHANNEL_NAME}'..."
+          infoln "Creating channel '${CHANNEL_NAME}'"
           createChannel "true" "true"
           ;;
         *)
@@ -547,12 +562,14 @@ function deployCC() {
     else
       fatalln "Non-interactive environment detected and channel '${CHANNEL_NAME}' does not exist. Exiting."
     fi
-  else
-    infoln "Channel '${CHANNEL_NAME}' exists."
+  elif [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "Channel '${CHANNEL_NAME}' exists"
   fi
 
   # 3. Check if the chaincode is already deployed
-  infoln "Checking if chaincode '${CC_NAME}' is already committed on channel '${CHANNEL_NAME}'..."
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Checking if chaincode '${CC_NAME}' is committed on channel '${CHANNEL_NAME}'"
+  fi
 
   # Source envVar.sh to set peer CLI variables for Org1 Peer0
   . ${ROOTDIR}/scripts/envVar.sh
@@ -575,9 +592,14 @@ function deployCC() {
     # Chaincode is already committed on the channel!
     committed_version=$(echo "$committed_info" | grep -i "Version:" | sed -e 's/.*Version: \([^,]*\).*/\1/')
 
-    # Package the local chaincode to check version/hash
-    infoln "Packaging chaincode to calculate package ID..."
-    ${ROOTDIR}/scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION
+    # Package the local chaincode to check version/hash quietly in pre-flight
+    set +e
+    if [ "${VERBOSE:-false}" = "true" ]; then
+      ${ROOTDIR}/scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION
+    else
+      ${ROOTDIR}/scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION >&log.txt 2>&1
+    fi
+    set -e
 
     # Calculate package ID and hash
     export FABRIC_CFG_PATH="${ROOTDIR}/config"
@@ -620,31 +642,36 @@ function deployCC() {
 
       # Prompt user for upgrade
       if [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
-        infoln "Proceeding to upgrade/re-deploy chaincode '${CC_NAME}'..."
+        infoln "Proceeding to upgrade/re-deploy chaincode '${CC_NAME}'"
       elif [ -t 0 ]; then
         read -p "Chaincode '${CC_NAME}' has changed (new hash: ${LOCAL_HASH}). Would you like to upgrade/re-deploy it? [yes,always,No]: " answer
         answer_lc=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
         case "$answer_lc" in
           always|a)
             PROMPT_ALWAYS=true
-            infoln "Proceeding to upgrade/re-deploy chaincode '${CC_NAME}' (always=true)..."
+            infoln "Proceeding to upgrade/re-deploy chaincode '${CC_NAME}' (always=true)"
             ;;
           yes|y)
-            infoln "Proceeding to upgrade/re-deploy chaincode '${CC_NAME}'..."
+            infoln "Proceeding to upgrade/re-deploy chaincode '${CC_NAME}'"
             ;;
           *)
             fatalln "Exiting without upgrading chaincode."
             ;;
         esac
       else
-        infoln "Non-interactive environment detected. Proceeding to upgrade/re-deploy chaincode '${CC_NAME}'..."
+        infoln "Non-interactive environment detected. Proceeding to upgrade/re-deploy chaincode '${CC_NAME}'"
       fi
     fi
   else
     # Chaincode with this name is not committed on the channel.
-    # Package the local chaincode to check version/hash
-    infoln "Packaging chaincode to calculate package ID..."
-    ${ROOTDIR}/scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION
+    # Package the local chaincode to check version/hash quietly in pre-flight
+    set +e
+    if [ "${VERBOSE:-false}" = "true" ]; then
+      ${ROOTDIR}/scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION
+    else
+      ${ROOTDIR}/scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION >&log.txt 2>&1
+    fi
+    set -e
 
     # Calculate package ID and hash
     export FABRIC_CFG_PATH="${ROOTDIR}/config"
@@ -668,37 +695,19 @@ function deployCC() {
         fi
       fi
     fi
-
-    # Prompt user for deployment
-    if [ "${PROMPT_ALWAYS:-false}" = "true" ]; then
-      infoln "Proceeding to deploy chaincode '${CC_NAME}'..."
-    elif [ -t 0 ]; then
-      read -p "Chaincode '${CC_NAME}' is not deployed on channel '${CHANNEL_NAME}'. Would you like to deploy it? [yes,always,No]: " answer
-      answer_lc=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
-      case "$answer_lc" in
-        always|a)
-          PROMPT_ALWAYS=true
-          infoln "Proceeding to deploy chaincode '${CC_NAME}' (always=true)..."
-          ;;
-        yes|y)
-          infoln "Proceeding to deploy chaincode '${CC_NAME}'..."
-          ;;
-        *)
-          fatalln "Exiting without deploying chaincode."
-          ;;
-      esac
-    else
-      infoln "Non-interactive environment detected. Proceeding to deploy chaincode '${CC_NAME}'..."
-    fi
   fi
 
-  scripts/deployCC.sh $CHANNEL_NAME $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION $CC_SEQUENCE $CC_INIT_FCN $CC_END_POLICY $CC_COLL_CONFIG 3 5 false "true" "true" "true"
+  export SKIP_HEADER=true
+  scripts/deployCC.sh $CHANNEL_NAME $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION $CC_SEQUENCE $CC_INIT_FCN $CC_END_POLICY $CC_COLL_CONFIG 3 5 "${VERBOSE}" "true" "true" "true"
   if [ $? -ne 0 ]; then
     fatalln "Deploying chaincode failed"
   fi
+
+  println "\n${C_BOLD_CYAN}Next Steps:${C_RESET}"
+  println "  1. Invoke chaincode: ${C_BOLD_WHITE}./network.sh cc invoke -c ${CHANNEL_NAME} -ccn ${CC_NAME} -ccic '{\"Args\":[\"CreateAsset\",\"asset1\",\"blue\",\"5\",\"Tom\",\"35\"]}'${C_RESET}"
+  println "  2. Query chaincode:  ${C_BOLD_WHITE}./network.sh cc query -c ${CHANNEL_NAME} -ccn ${CC_NAME} -ccqc '{\"Args\":[\"ReadAsset\",\"asset1\"]}'${C_RESET}"
+  println "  3. List chaincodes:  ${C_BOLD_WHITE}./network.sh cc list -org 1${C_RESET}\n"
 }
-
-
 
 function listChaincode() {
   export FABRIC_CFG_PATH="${ROOTDIR}/config"
@@ -711,10 +720,11 @@ function listChaincode() {
   fi
   setGlobals "$org_idx"
 
-  println "Installed chaincodes on peer0 of $(getOrgName "$org_idx"):"
+  headerln "Listing Chaincode on $(getOrgName "$org_idx")"
+  println "${C_BOLD_CYAN}Installed chaincodes on peer0 of $(getOrgName "$org_idx"):${C_RESET}"
   queryInstalledOnPeer
   println
-  println "Committed chaincodes:"
+  println "${C_BOLD_CYAN}Committed chaincodes on channel '${CHANNEL_NAME}':${C_RESET}"
   listAllCommitted
 }
 
@@ -737,6 +747,7 @@ function invokeChaincode() {
     {{- end }}
   {{- end }}
 
+  headerln "Invoking Chaincode '${CC_NAME}' on Channel '${CHANNEL_NAME}'"
   parsePeerConnectionParameters "${orgs[@]}"
   chaincodeInvoke "$org_idx" "$CHANNEL_NAME" "$CC_NAME" "$CC_INVOKE_CONSTRUCTOR"
 }
@@ -752,6 +763,7 @@ function queryChaincode() {
   fi
   setGlobals "$org_idx"
 
+  headerln "Querying Chaincode '${CC_NAME}' on Channel '${CHANNEL_NAME}'"
   chaincodeQuery "$org_idx" "$CHANNEL_NAME" "$CC_NAME" "$CC_QUERY_CONSTRUCTOR"
 }
 
@@ -759,7 +771,7 @@ function packageChaincode() {
   export FABRIC_CFG_PATH="${ROOTDIR}/config"
   . "${ROOTDIR}/scripts/envVar.sh"
 
-  infoln "Packaging chaincode: ${CC_NAME} (version: ${CC_VERSION})"
+  headerln "Packaging Chaincode '${CC_NAME}' (v${CC_VERSION})"
   ${ROOTDIR}/scripts/packageCC.sh "$CC_NAME" "$CC_SRC_PATH" "$CC_SRC_LANGUAGE" "$CC_VERSION" "true"
 }
 
@@ -964,16 +976,39 @@ elif [ "$MODE" == "addOrg" ]; then
   fi
 
   ${ROOTDIR}/scripts/addOrg.sh "$ORG" "$CHANNEL_NAME"
+elif [ "$MODE" == "monitoring" ]; then
+  SUBCOMMAND=${1:-"up"}
+  if [ "$SUBCOMMAND" == "up" ]; then
+    headerln "Starting Monitoring Stack (Prometheus + Grafana)"
+    ${CONTAINER_CLI_COMPOSE} -f ${ROOTDIR}/compose/compose-monitoring.yaml up -d
+    successln "Monitoring stack is up and running."
+    println "  Prometheus: ${C_BOLD_WHITE}http://localhost:9090${C_RESET}"
+    println "  Grafana:    ${C_BOLD_WHITE}http://localhost:3000${C_RESET} (admin/adminpw)"
+  elif [ "$SUBCOMMAND" == "down" ]; then
+    headerln "Stopping Monitoring Stack"
+    ${CONTAINER_CLI_COMPOSE} -f ${ROOTDIR}/compose/compose-monitoring.yaml down
+    successln "Monitoring stack stopped."
+  else
+    errorln "Unknown monitoring subcommand: $SUBCOMMAND"
+    exit 1
+  fi
 elif [ "$MODE" == "down" ]; then
   networkDown
-else
+elif [ "$MODE" == "-h" ] || [ "$MODE" == "--help" ] || [ -z "$MODE" ]; then
+  println "${C_BOLD_CYAN}Hyperledger Fabric Network CLI${C_RESET}"
   println "Usage: "
-  println "  network.sh bootstrap"
-  println "  network.sh up"
-  println "  network.sh createChannel <channel_name>"
-  println "  network.sh deployCC -ccn <name> -ccp <path> -ccl <language>"
-  println "  network.sh addOrg -org <OrgName> -c <ChannelName>"
-  println "  network.sh cc [package|list|invoke|query] [flags]"
-  println "  network.sh down"
+  println "  ${C_BOLD_WHITE}./network.sh bootstrap${C_RESET}"
+  println "  ${C_BOLD_WHITE}./network.sh up [-v|--verbose] [-u|--utility]${C_RESET}"
+  println "  ${C_BOLD_WHITE}./network.sh createChannel [channel_name]${C_RESET}"
+  println "  ${C_BOLD_WHITE}./network.sh deployCC -ccn <name> -ccp <path> -ccl <language>${C_RESET}"
+  println "  ${C_BOLD_WHITE}./network.sh addOrg -org <OrgName> -c <ChannelName>${C_RESET}"
+  println "  ${C_BOLD_WHITE}./network.sh cc [package|list|invoke|query] [flags]${C_RESET}"
+  println "  ${C_BOLD_WHITE}./network.sh monitoring [up|down]${C_RESET}"
+  println "  ${C_BOLD_WHITE}./network.sh down${C_RESET}"
+  exit 0
+else
+  errorln "Unknown command: $MODE"
+  println "Run './network.sh --help' for usage."
   exit 1
 fi
+

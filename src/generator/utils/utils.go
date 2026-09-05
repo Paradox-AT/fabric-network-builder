@@ -7,9 +7,9 @@ import (
 	"network-builder/src/config"
 )
 
-// GetFuncMap returns a template.FuncMap containing all shared helper functions for templates.
+// GetFuncMap returns a new template.FuncMap containing all shared helper functions for templates.
+// All functions are stateless and thread-safe for concurrent template execution.
 func GetFuncMap() template.FuncMap {
-	currentID := 0
 	return template.FuncMap{
 		"until": func(count int) []int {
 			var r []int
@@ -29,10 +29,6 @@ func GetFuncMap() template.FuncMap {
 		},
 		"toLower": strings.ToLower,
 		"toUpper": strings.ToUpper,
-		"nextID": func() int {
-			currentID++
-			return currentID
-		},
 		"calculatePeerPort": func(orgIndex, peerIndex, offset int) int {
 			return ((orgIndex + 1) * 10000) + 4000 + (peerIndex * 100) + (offset % 100)
 		},
@@ -55,3 +51,4 @@ func GetFuncMap() template.FuncMap {
 		},
 	}
 }
+

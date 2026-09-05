@@ -2,9 +2,9 @@ package configtx
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
-	"os"
 	"path/filepath"
 	"text/template"
 
@@ -24,8 +24,14 @@ func NewConfigtxGenerator() *ConfigtxGenerator {
 }
 
 // Generate implements the Generator interface
-func (g *ConfigtxGenerator) Generate(cfg *config.NetworkConfig, outputDir string) error {
-	// nextID is generator-local state; merge it into the shared FuncMap.
+func (g *ConfigtxGenerator) Generate(ctx context.Context, cfg *config.NetworkConfig, outputDir string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// nextID is generator-local state; merge it into the shared FuncMap cleanly.
 	currentID := 0
 	funcs := utils.GetFuncMap()
 	funcs["nextID"] = func() int {
@@ -38,24 +44,17 @@ func (g *ConfigtxGenerator) Generate(cfg *config.NetworkConfig, outputDir string
 		return fmt.Errorf("failed to parse configtx template: %w", err)
 	}
 
-	configtxDir := filepath.Join(outputDir, "configtx")
-	err = os.MkdirAll(configtxDir, 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create configtx output directory: %w", err)
-	}
-
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to execute configtx template: %w", err)
 	}
 
-	filePath := filepath.Join(configtxDir, "configtx.yaml")
-	err = os.WriteFile(filePath, buf.Bytes(), 0644)
-	if err != nil {
+	filePath := filepath.Join(outputDir, "configtx", "configtx.yaml")
+	if err := config.WriteFileAtomic(filePath, buf.Bytes(), 0600); err != nil {
 		return fmt.Errorf("failed to write configtx.yaml: %w", err)
 	}
 
-	fmt.Printf("Generated %s\n", filePath)
 	return nil
 }
+

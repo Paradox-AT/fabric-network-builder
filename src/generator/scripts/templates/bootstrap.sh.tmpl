@@ -6,6 +6,8 @@ set -euo pipefail
 
 ROOTDIR=$(cd "$(dirname "$0")"/../ && pwd)
 . "${ROOTDIR}/network.config"
+. "${ROOTDIR}/scripts/utils.sh"
+
 export CONTAINER_CLI=${CONTAINER_CLI:-docker}
 
 # Detect OS and Architecture
@@ -18,8 +20,7 @@ case "${OS_NAME}" in
     OS_NAME=linux
     ;;
   *)
-    echo "Unknown, unsupported OS: ${OS_NAME}"
-    exit 1
+    fatalln "Unknown, unsupported OS: ${OS_NAME}"
     ;;
 esac
 
@@ -32,12 +33,11 @@ case "${ARCH}" in
     ARCH=arm64
     ;;
   *)
-    echo "Unknown, unsupported architecture: ${ARCH}"
-    exit 1
+    fatalln "Unknown, unsupported architecture: ${ARCH}"
     ;;
 esac
 
-echo "=== Detected Platform: ${OS_NAME}-${ARCH} ==="
+headerln "Bootstrapping Hyperledger Fabric v${FABRIC_VERSION} (${OS_NAME}-${ARCH})"
 
 # Registry detection logic from official install-fabric.sh
 dockerFabricRegistry() {
@@ -70,7 +70,7 @@ dockerCARegistry() {
 # Prior to fabric 2.5, use amd64 binaries on darwin-arm64
 if [ "${OS_NAME}" == "darwin" ] && [ "${ARCH}" == "arm64" ]; then
   if [[ ${FABRIC_VERSION} =~ ^2\.[0-4]\.* ]]; then
-    echo "==> Falling back to amd64 binaries for Fabric ${FABRIC_VERSION} on Darwin ARM64"
+    warnln "Falling back to amd64 binaries for Fabric ${FABRIC_VERSION} on Darwin ARM64"
     ARCH=amd64
   fi
 fi
@@ -83,12 +83,14 @@ download() {
   local FILE=${3:-}
 
   if [ -f "${FILE}" ]; then
-    echo "==> ${LABEL} already downloaded."
+    task_successln "${LABEL} already downloaded."
   else
-    echo "==> Downloading ${LABEL}..."
-    curl -L --retry 5 --retry-delay 3 "${URL}" -o "${FILE}" || { echo "Error downloading ${URL}"; exit 1; }
+    stepln "Downloading ${LABEL}"
+    curl -L --retry 5 --retry-delay 3 "${URL}" -o "${FILE}" || fatalln "Error downloading ${URL}"
   fi
 }
+
+sectionln "Downloading Fabric Binaries"
 
 # 1. Download and extract binaries
 BINARY_FILE="${ROOTDIR}/hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz"
@@ -98,17 +100,17 @@ NEED_FABRIC=true
 if [ -f "${ROOTDIR}/bin/peer" ]; then
   CURRENT_VER=$("${ROOTDIR}/bin/peer" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
   if [ "${CURRENT_VER}" == "${FABRIC_VERSION}" ]; then
-    echo "==> Fabric binaries (v${CURRENT_VER}) already exist. Skipping download."
+    task_successln "Fabric binaries (v${CURRENT_VER}) already exist. Skipping download."
     NEED_FABRIC=false
   else
-    echo "==> Version mismatch: found v${CURRENT_VER}, need v${FABRIC_VERSION}."
+    warnln "Version mismatch: found v${CURRENT_VER}, need v${FABRIC_VERSION}."
   fi
 fi
 
 if [ "$NEED_FABRIC" == "true" ]; then
   while true; do
     download "Fabric Binaries" "${BINARY_URL}" "${BINARY_FILE}"
-    echo "==> Verifying SHA256 checksum for Fabric binaries via GitHub Releases API..."
+    stepln "Verifying SHA256 checksum for Fabric binaries via GitHub Releases API"
     DIGEST=$(curl -sL "https://api.github.com/repos/hyperledger/fabric/releases/tags/v${FABRIC_VERSION}" \
       | jq -r --arg name "hyperledger-fabric-${PLATFORM}-${FABRIC_VERSION}.tar.gz" \
         '.assets[] | select(.name == $name) | .digest' 2>/dev/null || true)
@@ -117,41 +119,43 @@ if [ "$NEED_FABRIC" == "true" ]; then
       EXPECTED_HASH=$(echo "${DIGEST}" | cut -d':' -f2)
       ACTUAL_HASH=$(sha256sum "${BINARY_FILE}" | awk '{print $1}')
       if [ "${EXPECTED_HASH}" != "${ACTUAL_HASH}" ]; then
-        echo "ERROR: SHA256 mismatch for Fabric binaries."
-        echo "  Expected: ${EXPECTED_HASH}"
-        echo "  Actual:   ${ACTUAL_HASH}"
+        errorln "SHA256 mismatch for Fabric binaries."
+        errorln "  Expected: ${EXPECTED_HASH}"
+        errorln "  Actual:   ${ACTUAL_HASH}"
         rm -f "${BINARY_FILE}"
         if [ -t 0 ]; then
           read -p "SHA256 mismatch detected. Would you like to retry the download? [y/N]: " retry_choice
           case "$retry_choice" in
             [yY]|[yY][eE][sS])
-              echo "Retrying download..."
+              infoln "Retrying download"
               continue
               ;;
           esac
         fi
         exit 1
       fi
-      echo "==> SHA256 checksum verified."
+      task_successln "SHA256 checksum verified."
     else
-      echo "WARNING: Could not retrieve checksum from GitHub API (might be rate-limited or offline)."
-      echo "         Skipping integrity verification."
+      warnln "Could not retrieve checksum from GitHub API. Skipping integrity verification."
     fi
     break
   done
+  stepln "Extracting Fabric binaries to ${ROOTDIR}"
   tar -C "${ROOTDIR}" -xzf "${BINARY_FILE}"
   rm "${BINARY_FILE}"
+  task_successln "Fabric binaries installed in ${ROOTDIR}/bin"
 fi
 
 if [ "${CRYPTO}" == "Fabric CA" ]; then
+  sectionln "Downloading Fabric CA Binaries"
   NEED_CA=true
   if [ -f "${ROOTDIR}/bin/fabric-ca-client" ]; then
     CURRENT_CA_VER=$("${ROOTDIR}/bin/fabric-ca-client" version | grep "Version:" | awk '{print $2}' | tr -d 'v')
     if [ "${CURRENT_CA_VER}" == "${CA_VERSION}" ]; then
-      echo "==> Fabric CA binaries (v${CURRENT_CA_VER}) already exist. Skipping download."
+      task_successln "Fabric CA binaries (v${CURRENT_CA_VER}) already exist. Skipping download."
       NEED_CA=false
     else
-       echo "==> CA Version mismatch: found v${CURRENT_CA_VER}, need v${CA_VERSION}."
+      warnln "CA Version mismatch: found v${CURRENT_CA_VER}, need v${CA_VERSION}."
     fi
   fi
 
@@ -160,7 +164,7 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
     CA_BINARY_URL="https://github.com/hyperledger/fabric-ca/releases/download/v${CA_VERSION}/hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz"
     while true; do
       download "Fabric CA Binaries" "${CA_BINARY_URL}" "${CA_BINARY_FILE}"
-      echo "==> Verifying SHA256 checksum for Fabric CA binaries via GitHub Releases API..."
+      stepln "Verifying SHA256 checksum for Fabric CA binaries via GitHub Releases API"
       DIGEST_CA=$(curl -sL "https://api.github.com/repos/hyperledger/fabric-ca/releases/tags/v${CA_VERSION}" \
         | jq -r --arg name "hyperledger-fabric-ca-${PLATFORM}-${CA_VERSION}.tar.gz" \
           '.assets[] | select(.name == $name) | .digest' 2>/dev/null || true)
@@ -169,30 +173,31 @@ if [ "${CRYPTO}" == "Fabric CA" ]; then
         EXPECTED_HASH=$(echo "${DIGEST_CA}" | cut -d':' -f2)
         ACTUAL_HASH=$(sha256sum "${CA_BINARY_FILE}" | awk '{print $1}')
         if [ "${EXPECTED_HASH}" != "${ACTUAL_HASH}" ]; then
-          echo "ERROR: SHA256 mismatch for Fabric CA binaries."
-          echo "  Expected: ${EXPECTED_HASH}"
-          echo "  Actual:   ${ACTUAL_HASH}"
+          errorln "SHA256 mismatch for Fabric CA binaries."
+          errorln "  Expected: ${EXPECTED_HASH}"
+          errorln "  Actual:   ${ACTUAL_HASH}"
           rm -f "${CA_BINARY_FILE}"
           if [ -t 0 ]; then
             read -p "SHA256 mismatch detected. Would you like to retry the download? [y/N]: " retry_choice
             case "$retry_choice" in
               [yY]|[yY][eE][sS])
-                echo "Retrying download..."
+                infoln "Retrying download"
                 continue
                 ;;
             esac
           fi
           exit 1
         fi
-        echo "==> SHA256 checksum verified."
+        task_successln "Fabric CA SHA256 checksum verified."
       else
-        echo "WARNING: Could not retrieve CA checksum from GitHub API (might be rate-limited or offline)."
-        echo "         Skipping integrity verification."
+        warnln "Could not retrieve CA checksum from GitHub API. Skipping integrity verification."
       fi
       break
     done
+    stepln "Extracting Fabric CA binaries to ${ROOTDIR}"
     tar -C "${ROOTDIR}" -xzf "${CA_BINARY_FILE}"
     rm "${CA_BINARY_FILE}"
+    task_successln "Fabric CA binaries installed in ${ROOTDIR}/bin"
   fi
 fi
 
@@ -200,27 +205,30 @@ fi
 FABRIC_REGISTRY=$(dockerFabricRegistry "${FABRIC_VERSION}")
 CA_REGISTRY=$(dockerCARegistry "${CA_VERSION}")
 
-echo "=== Pulling Fabric Docker Images from ${FABRIC_REGISTRY} ==="
+sectionln "Pulling Fabric Docker Images from ${FABRIC_REGISTRY}"
 for image in peer orderer ccenv baseos; do
   FULL_IMAGE="${FABRIC_REGISTRY}/fabric-${image}:${FABRIC_VERSION}"
-  echo "==> Pulling ${FULL_IMAGE}..."
-  "${CONTAINER_CLI}" pull "${FULL_IMAGE}" || { echo "ERROR: Failed to pull ${FULL_IMAGE}. Check registry connectivity and image tag."; exit 1; }
+  stepln "Pulling ${FULL_IMAGE}"
+  "${CONTAINER_CLI}" pull "${FULL_IMAGE}" || fatalln "Failed to pull ${FULL_IMAGE}. Check registry connectivity and image tag."
   "${CONTAINER_CLI}" tag "${FULL_IMAGE}" "hyperledger/fabric-${image}:${FABRIC_VERSION}"
   "${CONTAINER_CLI}" tag "${FULL_IMAGE}" "hyperledger/fabric-${image}"
+  task_successln "Image ready: hyperledger/fabric-${image}:${FABRIC_VERSION}"
 done
 
 if [ "${CRYPTO}" == "Fabric CA" ]; then
-  echo "=== Pulling Fabric CA Image from ${CA_REGISTRY} ==="
+  sectionln "Pulling Fabric CA Docker Image from ${CA_REGISTRY}"
   FULL_CA_IMAGE="${CA_REGISTRY}/fabric-ca:${CA_VERSION}"
-  echo "==> Pulling ${FULL_CA_IMAGE}..."
-  "${CONTAINER_CLI}" pull "${FULL_CA_IMAGE}" || { echo "ERROR: Failed to pull ${FULL_CA_IMAGE}."; exit 1; }
+  stepln "Pulling ${FULL_CA_IMAGE}"
+  "${CONTAINER_CLI}" pull "${FULL_CA_IMAGE}" || fatalln "Failed to pull ${FULL_CA_IMAGE}."
   "${CONTAINER_CLI}" tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca:${CA_VERSION}"
   "${CONTAINER_CLI}" tag "${FULL_CA_IMAGE}" "hyperledger/fabric-ca"
+  task_successln "Image ready: hyperledger/fabric-ca:${CA_VERSION}"
   
   if [ "${CA_DATABASE_TYPE}" == "postgres" ]; then
-    echo "=== Pulling Postgres Image ==="
-    echo "==> Pulling postgres:${POSTGRES_VERSION}..."
-    "${CONTAINER_CLI}" pull "postgres:${POSTGRES_VERSION}" || { echo "ERROR: Failed to pull postgres:${POSTGRES_VERSION}."; exit 1; }
+    sectionln "Pulling PostgreSQL Docker Image"
+    stepln "Pulling postgres:${POSTGRES_VERSION}"
+    "${CONTAINER_CLI}" pull "postgres:${POSTGRES_VERSION}" || fatalln "Failed to pull postgres:${POSTGRES_VERSION}."
+    task_successln "Image ready: postgres:${POSTGRES_VERSION}"
   fi
 fi
 
@@ -235,15 +243,18 @@ fi
 
 {{- if $anyCouch }}
 if [ -n "${COUCHDB_VERSION}" ]; then
-  echo "=== Pulling CouchDB Image ==="
-  echo "==> Pulling couchdb:${COUCHDB_VERSION}..."
-  "${CONTAINER_CLI}" pull "couchdb:${COUCHDB_VERSION}" || { echo "ERROR: Failed to pull couchdb:${COUCHDB_VERSION}."; exit 1; }
+  sectionln "Pulling CouchDB Docker Image"
+  stepln "Pulling couchdb:${COUCHDB_VERSION}"
+  "${CONTAINER_CLI}" pull "couchdb:${COUCHDB_VERSION}" || fatalln "Failed to pull couchdb:${COUCHDB_VERSION}."
+  task_successln "Image ready: couchdb:${COUCHDB_VERSION}"
 fi
 {{- end }}
 
-echo "=== Pulling Busybox for utility tasks ==="
-"${CONTAINER_CLI}" pull busybox || { echo "ERROR: Failed to pull busybox."; exit 1; }
+stepln "Pulling Busybox utility image"
+"${CONTAINER_CLI}" pull busybox || fatalln "Failed to pull busybox."
+task_successln "Image ready: busybox"
 
-echo "=== Bootstrap Complete ==="
-echo "Binaries are located in: ${ROOTDIR}/bin"
-echo "Container images have been pulled."
+headerln "Bootstrap Complete!"
+println "  ${C_BOLD_WHITE}Binaries:${C_RESET} ${ROOTDIR}/bin"
+println "  ${C_BOLD_WHITE}Configs:${C_RESET}  ${ROOTDIR}/config"
+println "  ${C_BOLD_WHITE}Images:${C_RESET}   Fabric v${FABRIC_VERSION}, CA v${CA_VERSION}\n"

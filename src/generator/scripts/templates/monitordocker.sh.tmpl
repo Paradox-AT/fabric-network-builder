@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Monitor docker logs for all containers in the Fabric network
+# Usage: ./monitordocker.sh [filter]
+
+COMPOSE_PROJECT="{{ toLower .NetworkName }}"
+FILTER="${1:-}"
+
+if [ -n "${FILTER}" ]; then
+  docker logs -f --tail=50 "${FILTER}" 2>&1
+else
+  echo "Streaming logs for project: ${COMPOSE_PROJECT}"
+  echo "Press Ctrl+C to stop."
+  echo ""
+  docker compose --project-name "${COMPOSE_PROJECT}" logs -f --tail=50 2>&1
+fi

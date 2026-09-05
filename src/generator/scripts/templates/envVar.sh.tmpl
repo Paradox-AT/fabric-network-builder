@@ -65,10 +65,6 @@ setGlobals() {
   else
     errorln "ORG Unknown"
   fi
-
-  if [ "$VERBOSE" = "true" ]; then
-    env | grep CORE
-  fi
 }
 
 # parsePeerConnectionParameters $@
@@ -155,6 +151,62 @@ getOrgDomain() {
   fi
 }
 
+getOrgMSP() {
+  {{- $firstOrg := true }}
+  {{- range $i, $org := .Orgs }}
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
+    echo "{{ .MSPID }}"
+    {{- $firstOrg = false }}
+  {{- end }}
+  else
+    fatalln "getOrgMSP: unknown org index '${1:-}'"
+  fi
+}
+
+getOrgCAName() {
+  {{- $firstOrg := true }}
+  {{- range $i, $org := .Orgs }}
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
+    echo "{{ .CAName }}"
+    {{- $firstOrg = false }}
+  {{- end }}
+  else
+    fatalln "getOrgCAName: unknown org index '${1:-}'"
+  fi
+}
+
+getOrgCAPort() {
+  {{- $firstOrg := true }}
+  {{- range $i, $org := .Orgs }}
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ ${1:-0} -eq {{ inc $i }} ]; then
+    echo "{{ calculateCAPort $i 7054 }}"
+    {{- $firstOrg = false }}
+  {{- end }}
+  else
+    fatalln "getOrgCAPort: unknown org index '${1:-}'"
+  fi
+}
+
+getOrgPeerPort() {
+  local org_idx=${1:-1}
+  local peer_idx=${2:-0}
+  {{- $firstOrg := true }}
+  {{- range $i, $org := .Orgs }}
+  {{ if $firstOrg }}if{{ else }}elif{{ end }} [ $org_idx -eq {{ inc $i }} ]; then
+    {{ range $j, $p := until .PeerCount }}
+    if [ $peer_idx -eq {{ $j }} ]; then
+      echo "{{ calculatePeerPort $i $j 7051 }}"
+      return 0
+    fi
+    {{- end }}
+    echo "{{ calculatePeerPort $i 0 7051 }}"
+    {{- $firstOrg = false }}
+  {{- end }}
+  else
+    fatalln "getOrgPeerPort: unknown org index '${1:-}'"
+  fi
+}
+
 verifyPeerOrg() {
   local org_idx=$1
   {{- $firstOrg := true }}
@@ -174,4 +226,45 @@ verifyPeerOrg() {
   fi
 }
 
-# verifyResult is exported by utils.sh — do not redefine it here.
+checkNetworkContainersUp() {
+  local mode="${1:-normal}"
+  local missing=()
+  local stopped=()
+
+  {{- range $i, $org := .Orgs }}
+    {{- range $j, $peer := until .PeerCount }}
+  local p_name="peer{{ $j }}.{{ $org.Domain }}"
+  local p_status=$("${CONTAINER_CLI}" inspect --format '{{ "{{" }}.State.Status{{ "}}" }}' "${p_name}" 2>/dev/null || true)
+  if [ -z "${p_status}" ]; then
+    missing+=("${p_name}")
+  elif [ "${p_status}" != "running" ]; then
+    stopped+=("${p_name} [${p_status}]")
+  fi
+    {{- end }}
+    {{- range $j, $orderer := until .OrdererCount }}
+  local o_name="orderer{{ $j }}.{{ $org.Domain }}"
+  local o_status=$("${CONTAINER_CLI}" inspect --format '{{ "{{" }}.State.Status{{ "}}" }}' "${o_name}" 2>/dev/null || true)
+  if [ -z "${o_status}" ]; then
+    missing+=("${o_name}")
+  elif [ "${o_status}" != "running" ]; then
+    stopped+=("${o_name} [${o_status}]")
+  fi
+    {{- end }}
+  {{- end }}
+
+  if [ ${#missing[@]} -gt 0 ] || [ ${#stopped[@]} -gt 0 ]; then
+    if [ "${mode}" != "quiet" ]; then
+      if [ ${#missing[@]} -gt 0 ]; then
+        warnln "Missing container(s): ${missing[*]}"
+      fi
+      if [ ${#stopped[@]} -gt 0 ]; then
+        warnln "Non-running container(s): ${stopped[*]}"
+      fi
+    fi
+    return 1
+  fi
+  return 0
+}
+
+export -f checkNetworkContainersUp
+

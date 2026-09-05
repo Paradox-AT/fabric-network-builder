@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: source ./setOrgEnv.sh <OrgName|OrgIndex> [PeerIndex]
+# Or:    export $(./setOrgEnv.sh Org1 | xargs)
+
+ROOTDIR=$(cd "$(dirname "$0")" && pwd)
+
+ORG_INPUT="${1:-}"
+PEER_INDEX="${2:-0}"
+
+if [ -z "${ORG_INPUT}" ]; then
+  echo "Usage: ./setOrgEnv.sh <OrgName> [PeerIndex]"
+  echo "Available organizations:"
+{{- range $i, $org := .Orgs }}
+  echo "  {{ inc $i }}. {{ .Name }} ({{ .MSPID }})"
+{{- end }}
+  exit 1
+fi
+
+# Resolve org name to lowercase for matching
+ORG_LOWER=$(echo "${ORG_INPUT}" | tr '[:upper:]' '[:lower:]')
+
+{{- $firstOrg := true }}
+{{- range $i, $org := .Orgs }}
+{{- if gt .PeerCount 0 }}
+{{ if $firstOrg }}if{{ else }}elif{{ end }} [ "${ORG_LOWER}" = "{{ toLower .Name }}" ] || [ "${ORG_INPUT}" = "{{ inc $i }}" ]; then
+  CORE_PEER_LOCALMSPID={{ .MSPID }}
+  CORE_PEER_MSPCONFIGPATH=${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/users/Admin@{{ .Domain }}/msp
+  CORE_PEER_TLS_ROOTCERT_FILE=${ROOTDIR}/organizations/{{ toLower .Name }}/identities/peer/tlsca/tlsca.{{ .Domain }}-cert.pem
+  case ${PEER_INDEX} in
+  {{- range $j, $p := until .PeerCount }}
+    {{ $j }}) CORE_PEER_ADDRESS=localhost:{{ calculatePeerPort $i $j 7051 }} ;;
+  {{- end }}
+    *) echo "ERROR: Peer index ${PEER_INDEX} out of range for {{ .Name }} (0-{{ add .PeerCount -1 }})"; exit 1 ;;
+  esac
+{{- $firstOrg = false }}
+{{- end }}
+{{- end }}
+else
+  echo "ERROR: Unknown organization '${ORG_INPUT}'"
+  exit 1
+fi
+
+# Find first orderer for ORDERER_CA and ORDERER_ADDRESS
+{{- range $i, $org := .Orgs }}
+{{- if gt .OrdererCount 0 }}
+ORDERER_CA=${ROOTDIR}/organizations/{{ toLower .Name }}/identities/orderer/tlsca/tlsca.{{ .Domain }}-cert.pem
+ORDERER_ADDRESS=localhost:{{ calculateOrdererPort $i 0 7050 }}
+ORDERER_ADMIN_ADDRESS=localhost:{{ calculateOrdererPort $i 0 7053 }}
+{{- break }}
+{{- end }}
+{{- end }}
+
+echo "CORE_PEER_TLS_ENABLED=true"
+echo "CORE_PEER_LOCALMSPID=${CORE_PEER_LOCALMSPID}"
+echo "CORE_PEER_ADDRESS=${CORE_PEER_ADDRESS}"
+echo "CORE_PEER_TLS_ROOTCERT_FILE=${CORE_PEER_TLS_ROOTCERT_FILE}"
+echo "CORE_PEER_MSPCONFIGPATH=${CORE_PEER_MSPCONFIGPATH}"
+echo "ORDERER_CA=${ORDERER_CA}"
+echo "ORDERER_ADDRESS=${ORDERER_ADDRESS}"
+echo "ORDERER_ADMIN_ADDRESS=${ORDERER_ADMIN_ADDRESS}"

@@ -34,6 +34,7 @@ services:
       - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${{ $orgUpper }}_COUCHDB_USER
       - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${{ $orgUpper }}_COUCHDB_PASSWORD
     depends_on:
-      - couchdb{{$i}}.{{ $.Org.Domain }}
+      couchdb{{$i}}.{{ $.Org.Domain }}:
+        condition: service_healthy
 {{- end }}
 {{- end }}

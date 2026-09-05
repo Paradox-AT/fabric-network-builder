@@ -41,6 +41,8 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 			ChaincodeMode:    "Embedded",
 			ChannelCount:     1,
 			BindAddress:      "0.0.0.0",
+			EnableMonitoring: true,
+			GenerateCCP:      true,
 		}
 		orgCountStr = "3"
 		channelCountStr = "1"
@@ -150,6 +152,12 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 						huh.NewOption("127.0.0.1 (Localhost only - more secure)", "127.0.0.1"),
 					).
 					Value(&cfg.BindAddress),
+				huh.NewConfirm().
+					Title("Generate Prometheus & Grafana monitoring stack?").
+					Value(&cfg.EnableMonitoring),
+				huh.NewConfirm().
+					Title("Generate Client Connection Profiles (CCP)?").
+					Value(&cfg.GenerateCCP),
 			),
 			huh.NewGroup(
 				huh.NewInput().
@@ -273,33 +281,13 @@ func RunWizard(existingCfg *config.NetworkConfig) (*config.NetworkConfig, error)
 		} // end org loop
 
 		// 4. Network-wide Validation
-		totalOrderers := 0
-		for _, org := range cfg.Orgs {
-			totalOrderers += org.OrdererCount
-		}
-
-		isValid := true
-		var errMsg string
-
-		switch cfg.OrdererType {
-		case "etcdraft":
-			if totalOrderers < 1 {
-				isValid = false
-				errMsg = "Raft (etcdraft) requires at least 1 orderer node."
-			}
-		case "BFT":
-			if totalOrderers < 4 || (totalOrderers-1)%3 != 0 {
-				isValid = false
-				errMsg = fmt.Sprintf("SmartBFT requires 3f+1 nodes (4, 7, 10...). You have %d.", totalOrderers)
-			}
-		}
-
-		if isValid {
+		if valErr := cfg.Validate(); valErr == nil {
 			break
+		} else {
+			fmt.Printf("\n[!] VALIDATION ERROR: %v\n", valErr)
 		}
 
-		fmt.Println("\n[!] VALIDATION ERROR:", errMsg)
-		fmt.Println("Press Enter to fix your configuration...")
+		fmt.Println("Press Enter to fix your configuration")
 		var dummy string
 		fmt.Scanln(&dummy)
 	}
@@ -464,6 +452,8 @@ func PrintSummary(cfg *config.NetworkConfig) {
 	fmt.Printf("Deploy Target:   %s\n", cfg.DeploymentTarget)
 	fmt.Printf("Chaincode Mode:  %s\n", cfg.ChaincodeMode)
 	fmt.Printf("Bind Address:    %s\n", cfg.BindAddress)
+	fmt.Printf("Monitoring:      %v\n", cfg.EnableMonitoring)
+	fmt.Printf("Generate CCP:    %v\n", cfg.GenerateCCP)
 	fmt.Printf("Channels:        %d\n", cfg.ChannelCount)
 
 	totalOrderers := 0

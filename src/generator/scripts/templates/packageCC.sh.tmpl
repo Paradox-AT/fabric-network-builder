@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source scripts/utils.sh
+ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
+. "${ROOTDIR}/scripts/utils.sh"
 
 CC_NAME=${1}
 CC_SRC_PATH=${2}
@@ -9,49 +10,40 @@ CC_SRC_LANGUAGE=${3}
 CC_VERSION=${4}
 
 if [ "${VERBOSE:-false}" = "true" ]; then
-  println "executing with the following"
-  println "- CC_NAME: ${C_GREEN}${CC_NAME}${C_RESET}"
-  println "- CC_SRC_PATH: ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
-  println "- CC_SRC_LANGUAGE: ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
-  println "- CC_VERSION: ${C_GREEN}${CC_VERSION}${C_RESET}"
+  println "${C_BOLD_CYAN}Chaincode Packaging Parameters:${C_RESET}"
+  println "  - CC_NAME:         ${C_GREEN}${CC_NAME}${C_RESET}"
+  println "  - CC_SRC_PATH:     ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
+  println "  - CC_SRC_LANGUAGE: ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
+  println "  - CC_VERSION:      ${C_GREEN}${CC_VERSION}${C_RESET}"
 fi
 
-ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
 export FABRIC_CFG_PATH=${ROOTDIR}/config
 
-#User has not provided a name
+# User has not provided a name
 if [ -z "$CC_NAME" ] || [ "$CC_NAME" = "NA" ]; then
-  fatalln "No chaincode name was provided. Valid call example: ./network.sh packageCC -ccn basic -ccp chaincode/asset-transfer-basic/chaincode-go -ccv 1.0 -ccl go"
-
-# User has not provided a path
+  fatalln "No chaincode name was provided. Example: ./network.sh cc package -ccn basic -ccp chaincode/asset-transfer-basic/chaincode-go -ccv 1.0 -ccl go"
 elif [ -z "$CC_SRC_PATH" ] || [ "$CC_SRC_PATH" = "NA" ]; then
-  fatalln "No chaincode path was provided. Valid call example: ./network.sh packageCC -ccn basic -ccp chaincode/asset-transfer-basic/chaincode-go -ccv 1.0 -ccl go"
-
-# User has not provided a language
+  fatalln "No chaincode path was provided. Example: ./network.sh cc package -ccn basic -ccp chaincode/asset-transfer-basic/chaincode-go -ccv 1.0 -ccl go"
 elif [ -z "$CC_SRC_LANGUAGE" ] || [ "$CC_SRC_LANGUAGE" = "NA" ]; then
-  fatalln "No chaincode language was provided. Valid call example: ./network.sh packageCC -ccn basic -ccp chaincode/asset-transfer-basic/chaincode-go -ccv 1.0 -ccl go"
-
-## Make sure that the path to the chaincode exists
+  fatalln "No chaincode language was provided. Example: ./network.sh cc package -ccn basic -ccp chaincode/asset-transfer-basic/chaincode-go -ccv 1.0 -ccl go"
 elif [ ! -d "$CC_SRC_PATH" ]; then
-  fatalln "Path to chaincode does not exist. Please provide different path."
+  fatalln "Path to chaincode '${CC_SRC_PATH}' does not exist. Please provide a valid path."
 fi
 
 CC_SRC_LANGUAGE=$(echo "$CC_SRC_LANGUAGE" | tr [:upper:] [:lower:])
 
-# do some language specific preparation to the chaincode before packaging
+# Language-specific preparation
 if [ "$CC_SRC_LANGUAGE" = "go" ]; then
   CC_RUNTIME_LANGUAGE=golang
-
-  infoln "Vendoring Go dependencies at $CC_SRC_PATH"
-  run_verbose bash -c "cd '$CC_SRC_PATH' && GO111MODULE=on go mod vendor"
-  successln "Finished vendoring Go dependencies"
+  task_start "Vendoring Go dependencies at ${CC_SRC_PATH}"
+  run_verbose bash -c "cd '$CC_SRC_PATH' && GO111MODULE=on go mod vendor" || { task_fail; fatalln "Go dependency vendoring failed"; }
+  task_done
 
 elif [ "$CC_SRC_LANGUAGE" = "java" ]; then
   CC_RUNTIME_LANGUAGE=java
-
-  infoln "Compiling Java code..."
-  run_verbose bash -c "cd '$CC_SRC_PATH' && ./gradlew installDist"
-  successln "Finished compiling Java code"
+  task_start "Compiling Java chaincode"
+  run_verbose bash -c "cd '$CC_SRC_PATH' && ./gradlew installDist" || { task_fail; fatalln "Java compilation failed"; }
+  task_done
   CC_SRC_PATH=$CC_SRC_PATH/build/install/$CC_NAME
 
 elif [ "$CC_SRC_LANGUAGE" = "javascript" ]; then
@@ -59,21 +51,13 @@ elif [ "$CC_SRC_LANGUAGE" = "javascript" ]; then
 
 elif [ "$CC_SRC_LANGUAGE" = "typescript" ]; then
   CC_RUNTIME_LANGUAGE=node
-
-  infoln "Compiling TypeScript code into JavaScript..."
-  run_verbose bash -c "cd '$CC_SRC_PATH' && npm install && npm run build"
-  successln "Finished compiling TypeScript code into JavaScript"
+  task_start "Compiling TypeScript chaincode"
+  run_verbose bash -c "cd '$CC_SRC_PATH' && npm install && npm run build" || { task_fail; fatalln "TypeScript compilation failed"; }
+  task_done
 
 else
-  fatalln "The chaincode language ${CC_SRC_LANGUAGE} is not supported by this script. Supported chaincode languages are: go, java, javascript, and typescript"
-  exit 1
+  fatalln "The chaincode language '${CC_SRC_LANGUAGE}' is not supported. Supported languages: go, java, javascript, typescript"
 fi
-
-verifyResult() {
-  if [ ${1:-0} -ne 0 ]; then
-    fatalln "${2:-}"
-  fi
-}
 
 packageChaincode() {
   local pkg_dir="${ROOTDIR}/channel-artifacts/packagedChaincode"
@@ -83,18 +67,10 @@ packageChaincode() {
     mkdir -p "${pkg_dir}"
   fi
 
-  infoln "Packaging chaincode '${CC_NAME}_${CC_VERSION}.tar.gz'..."
-  debug_on
-  set +e
-  peer lifecycle chaincode package "${pkg_file}" --path ${CC_SRC_PATH} --lang ${CC_RUNTIME_LANGUAGE} --label ${CC_NAME}_${CC_VERSION} >&log.txt
-  res=$?
-  set -e
-  debug_off
-  if [ $res -ne 0 ] || [ "${VERBOSE:-false}" = "true" ]; then
-    cat log.txt
-  fi
-  verifyResult $res "Chaincode packaging has failed"
-  successln "Chaincode is packaged"
+  task_start "Creating chaincode package archive: ${CC_NAME}_${CC_VERSION}.tar.gz"
+  run_verbose peer lifecycle chaincode package "${pkg_file}" --path "${CC_SRC_PATH}" --lang "${CC_RUNTIME_LANGUAGE}" --label "${CC_NAME}_${CC_VERSION}" || { task_fail; fatalln "Chaincode packaging failed"; }
+  task_done
+  successln "Chaincode '${CC_NAME}' v${CC_VERSION} packaged successfully."
 }
 
 ## package the chaincode

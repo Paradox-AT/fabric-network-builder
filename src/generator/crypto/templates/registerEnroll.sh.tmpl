@@ -23,8 +23,11 @@ function register_identity() {
   local ca_name="$4"
   local cert_file="$5"
 
-  infoln "Registering ${id_name} (${id_type}) for {{ .Org.Name }}..."
-  
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Registering identity '${id_name}' (${id_type}) on ${ca_name}"
+    println "${C_DIM}+ fabric-ca-client register --caname ${ca_name} --id.name ${id_name} --id.secret ${id_secret} --id.type ${id_type} --tls.certfiles ${cert_file}${C_RESET}"
+  fi
+
   set +e
   local reg_output
   reg_output=$(fabric-ca-client register --caname "${ca_name}" --id.name "${id_name}" --id.secret "${id_secret}" --id.type "${id_type}" --tls.certfiles "${cert_file}" 2>&1)
@@ -33,33 +36,49 @@ function register_identity() {
 
   if [ $reg_rc -ne 0 ]; then
     if [[ "${reg_output}" =~ "already registered" ]]; then
-      warnln "Identity '${id_name}' is already registered on ${ca_name}."
+      if [ "${VERBOSE:-false}" = "true" ]; then
+        task_warnln "Identity '${id_name}' is already registered on ${ca_name}."
+      fi
     else
-      errorln "Failed to register ${id_name}: ${reg_output}"
+      task_fail
+      task_errorln "Failed to register ${id_name}: ${reg_output}"
       exit 1
     fi
-  else
-    successln "Successfully registered ${id_name}"
+  elif [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "Registered ${id_name} (${id_type})"
   fi
 }
 
 function createOrg{{ add .OrgIndex 1 }}() {
-  infoln "Enrolling the CA admin for {{ .Org.Name }}"
-  
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    sectionln "Configuring Organization: {{ .Org.Name }} (Org{{ add .OrgIndex 1 }})"
+  fi
+
+  task_start "Enrolling identities and certificates for {{ .Org.Name }}"
+
   LOCAL_CA_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/ca"
   mkdir -p "${LOCAL_CA_DIR}"
-  infoln "Fetching CA certificate from container ca.{{ .Org.Domain }}..."
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Fetching CA certificate from container ca.{{ .Org.Domain }}"
+  fi
   run_verbose "${CONTAINER_CLI}" cp ca.{{ .Org.Domain }}:/etc/hyperledger/fabric-ca-server/ca-cert.pem "${LOCAL_CA_DIR}/ca-cert.pem"
-  
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "CA root certificate fetched"
+  fi
+
   # For peers
   {{ if gt .Org.PeerCount 0 }}
   ORG_DIR="${ROOTDIR}/organizations/{{ toLower .Org.Name }}/identities/peer"
   mkdir -p "${ORG_DIR}"
   export FABRIC_CA_CLIENT_HOME="${ORG_DIR}"
 
-  debug_on
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Enrolling CA admin for {{ .Org.Name }}"
+  fi
   run_verbose fabric-ca-client enroll -u https://${{ $orgUpper }}_CA_ADMIN_USER:${{ $orgUpper }}_CA_ADMIN_PASSWORD@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
-  debug_off
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "CA admin enrolled"
+  fi
 
   echo 'NodeOUs:
   Enable: true
@@ -92,39 +111,43 @@ function createOrg{{ add .OrgIndex 1 }}() {
   register_identity "{{ toLower .Org.Name }}admin" "${{ $orgUpper }}_CA_ADMIN_CLIENT_PASSWORD" "admin" "{{ .Org.CAName }}" "${LOCAL_CA_DIR}/ca-cert.pem"
 
   {{ range $j, $peer := until .Org.PeerCount }}
-  infoln "Generating the peer{{ $j }} msp for {{ $.Org.Name }}"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Generating MSP and TLS certificates for peer{{ $j }} ({{ $.Org.Name }})"
+  fi
   PEER_DIR="${ORG_DIR}/peers/peer{{ $j }}.{{ $.Org.Domain }}"
   mkdir -p "${PEER_DIR}"
-  debug_on
   run_verbose fabric-ca-client enroll -u https://peer{{ $j }}:peer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${PEER_DIR}/msp" --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
-  debug_off
 
   cp "${ORG_DIR}/msp/config.yaml" "${PEER_DIR}/msp/config.yaml"
 
-  infoln "Generating the peer{{ $j }}-tls certificates for {{ $.Org.Name }}"
-  debug_on
   run_verbose fabric-ca-client enroll -u https://peer{{ $j }}:peer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${PEER_DIR}/tls" --enrollment.profile tls --csr.hosts peer{{ $j }}.{{ $.Org.Domain }} --csr.hosts localhost --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
-  debug_off
 
   # Copy the tls CA cert, server cert, server keystore to well known file names
   cp "${PEER_DIR}/tls/tlscacerts/"* "${PEER_DIR}/tls/ca.crt"
   cp "${PEER_DIR}/tls/signcerts/"* "${PEER_DIR}/tls/server.crt"
   cp "${PEER_DIR}/tls/keystore/"* "${PEER_DIR}/tls/server.key"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "peer{{ $j }} certificates generated"
+  fi
   {{ end }}
 
-  infoln "Generating the user msp for {{ .Org.Name }}"
-  debug_on
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Generating User1 MSP for {{ .Org.Name }}"
+  fi
   run_verbose fabric-ca-client enroll -u https://user1:user1pw@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} -M "${ORG_DIR}/users/User1@{{ .Org.Domain }}/msp" --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
-  debug_off
-
   cp "${ORG_DIR}/msp/config.yaml" "${ORG_DIR}/users/User1@{{ .Org.Domain }}/msp/config.yaml"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "User1 MSP generated"
+  fi
 
-  infoln "Generating the org admin msp for {{ .Org.Name }}"
-  debug_on
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Generating Org Admin MSP for {{ .Org.Name }}"
+  fi
   run_verbose fabric-ca-client enroll -u https://{{ toLower .Org.Name }}admin:${{ $orgUpper }}_CA_ADMIN_CLIENT_PASSWORD@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} -M "${ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp" --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
-  debug_off
-
   cp "${ORG_DIR}/msp/config.yaml" "${ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp/config.yaml"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "Org Admin MSP generated"
+  fi
   {{ end }}
 
   # For orderers
@@ -133,10 +156,13 @@ function createOrg{{ add .OrgIndex 1 }}() {
   mkdir -p "${ORDERER_ORG_DIR}"
   export FABRIC_CA_CLIENT_HOME="${ORDERER_ORG_DIR}"
 
-  infoln "Enrolling the CA admin for {{ .Org.Name }} (Orderer)"
-  debug_on
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Enrolling CA admin for {{ .Org.Name }} Orderers"
+  fi
   run_verbose fabric-ca-client enroll -u https://${{ $orgUpper }}_CA_ADMIN_USER:${{ $orgUpper }}_CA_ADMIN_PASSWORD@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
-  debug_off
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "Orderer CA admin enrolled"
+  fi
 
   echo 'NodeOUs:
   Enable: true
@@ -162,19 +188,16 @@ function createOrg{{ add .OrgIndex 1 }}() {
   {{ range $j, $orderer := until .Org.OrdererCount }}
   register_identity "orderer{{ $j }}" "orderer{{ $j }}pw" "orderer" "{{ $.Org.CAName }}" "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
 
-  infoln "Generating the orderer{{ $j }} MSP for {{ $.Org.Name }}"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Generating MSP and TLS certificates for orderer{{ $j }} ({{ $.Org.Name }})"
+  fi
   ORDERER_DIR="${ORDERER_ORG_DIR}/orderers/orderer{{ $j }}.{{ $.Org.Domain }}"
   mkdir -p "${ORDERER_DIR}"
-  debug_on
   run_verbose fabric-ca-client enroll -u https://orderer{{ $j }}:orderer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${ORDERER_DIR}/msp" --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
-  debug_off
 
   cp "${ORDERER_ORG_DIR}/msp/config.yaml" "${ORDERER_DIR}/msp/config.yaml"
 
-  infoln "Generating the orderer{{ $j }} TLS certificates for {{ $.Org.Name }}"
-  debug_on
   run_verbose fabric-ca-client enroll -u https://orderer{{ $j }}:orderer{{ $j }}pw@localhost:{{ calculateCAPort $.OrgIndex 7054 }} --caname {{ $.Org.CAName }} -M "${ORDERER_DIR}/tls" --enrollment.profile tls --csr.hosts orderer{{ $j }}.{{ $.Org.Domain }} --csr.hosts localhost --tls.certfiles "${ROOTDIR}/organizations/{{ toLower $.Org.Name }}/ca/ca-cert.pem"
-  debug_off
 
   # Copy the tls CA cert, server cert, server keystore to well known file names
   cp "${ORDERER_DIR}/tls/tlscacerts/"* "${ORDERER_DIR}/tls/ca.crt"
@@ -184,15 +207,26 @@ function createOrg{{ add .OrgIndex 1 }}() {
   # Copy orderer org's CA cert to orderer's /msp/tlscacerts directory
   mkdir -p "${ORDERER_DIR}/msp/tlscacerts"
   cp "${ORDERER_DIR}/tls/tlscacerts/"* "${ORDERER_DIR}/msp/tlscacerts/tlsca.{{ $.Org.Domain }}-cert.pem"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "orderer{{ $j }} certificates generated"
+  fi
   {{ end }}
 
-  infoln "Generating the orderer admin msp for {{ .Org.Name }}"
-  debug_on
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    stepln "Generating Orderer Admin MSP for {{ .Org.Name }}"
+  fi
   run_verbose fabric-ca-client enroll -u https://{{ toLower .Org.Name }}admin:${{ $orgUpper }}_CA_ADMIN_CLIENT_PASSWORD@localhost:{{ calculateCAPort .OrgIndex 7054 }} --caname {{ .Org.CAName }} -M "${ORDERER_ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp" --tls.certfiles "${LOCAL_CA_DIR}/ca-cert.pem"
-  debug_off
-
   cp "${ORDERER_ORG_DIR}/msp/config.yaml" "${ORDERER_ORG_DIR}/users/Admin@{{ .Org.Domain }}/msp/config.yaml"
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "Orderer Admin MSP generated"
+  fi
   {{ end }}
+
+  if [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "Organization {{ .Org.Name }} identities and certificates configured"
+  else
+    task_done
+  fi
 }
 
 createOrg{{ add .OrgIndex 1 }}

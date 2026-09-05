@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source scripts/utils.sh
+ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
+. "${ROOTDIR}/scripts/utils.sh"
+. "${ROOTDIR}/network.config"
 
-# Load config to get default channel name
-. network.config
 CHANNEL_NAME=${1:-"${CHANNEL_NAME}"}
 CC_NAME=${2}
 CC_SRC_PATH=${3}
@@ -22,23 +22,21 @@ SKIP_CHANNEL_CHECK=${14:-"false"}
 SKIP_PACKAGING=${15:-"false"}
 
 if [ "${VERBOSE:-false}" = "true" ]; then
-  println "executing with the following"
-  println "- CHANNEL_NAME: ${C_GREEN}${CHANNEL_NAME}${C_RESET}"
-  println "- CC_NAME: ${C_GREEN}${CC_NAME}${C_RESET}"
-  println "- CC_SRC_PATH: ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
-  println "- CC_SRC_LANGUAGE: ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
-  println "- CC_VERSION: ${C_GREEN}${CC_VERSION}${C_RESET}"
-  println "- CC_SEQUENCE: ${C_GREEN}${CC_SEQUENCE}${C_RESET}"
-  println "- CC_END_POLICY: ${C_GREEN}${CC_END_POLICY}${C_RESET}"
-  println "- CC_COLL_CONFIG: ${C_GREEN}${CC_COLL_CONFIG}${C_RESET}"
-  println "- CC_INIT_FCN: ${C_GREEN}${CC_INIT_FCN}${C_RESET}"
-  println "- DELAY: ${C_GREEN}${DELAY}${C_RESET}"
-  println "- MAX_RETRY: ${C_GREEN}${MAX_RETRY}${C_RESET}"
-  println "- VERBOSE: ${C_GREEN}${VERBOSE}${C_RESET}"
+  println "${C_BOLD_CYAN}Chaincode Deployment Parameters:${C_RESET}"
+  println "  - CHANNEL_NAME:     ${C_GREEN}${CHANNEL_NAME}${C_RESET}"
+  println "  - CC_NAME:          ${C_GREEN}${CC_NAME}${C_RESET}"
+  println "  - CC_SRC_PATH:      ${C_GREEN}${CC_SRC_PATH}${C_RESET}"
+  println "  - CC_SRC_LANGUAGE:  ${C_GREEN}${CC_SRC_LANGUAGE}${C_RESET}"
+  println "  - CC_VERSION:       ${C_GREEN}${CC_VERSION}${C_RESET}"
+  println "  - CC_SEQUENCE:      ${C_GREEN}${CC_SEQUENCE}${C_RESET}"
+  println "  - CC_END_POLICY:    ${C_GREEN}${CC_END_POLICY}${C_RESET}"
+  println "  - CC_COLL_CONFIG:   ${C_GREEN}${CC_COLL_CONFIG}${C_RESET}"
+  println "  - CC_INIT_FCN:      ${C_GREEN}${CC_INIT_FCN}${C_RESET}"
+  println "  - DELAY:            ${C_GREEN}${DELAY}${C_RESET}"
+  println "  - MAX_RETRY:        ${C_GREEN}${MAX_RETRY}${C_RESET}"
 fi
 
 INIT_REQUIRED="--init-required"
-# check if the init fcn should be called
 if [ "$CC_INIT_FCN" = "NA" ]; then
   INIT_REQUIRED=""
 fi
@@ -55,28 +53,32 @@ else
   CC_COLL_CONFIG="--collections-config $CC_COLL_CONFIG"
 fi
 
-ROOTDIR=$(cd "$(dirname "$0")"/.. && pwd)
 export FABRIC_CFG_PATH=${ROOTDIR}/config
 
 # import utils
-. scripts/envVar.sh
-. scripts/ccutils.sh
+. "${ROOTDIR}/scripts/envVar.sh"
+. "${ROOTDIR}/scripts/ccutils.sh"
 
 function checkPrereqs() {
-  jq --version > /dev/null 2>&1
-
-  if [[ $? -ne 0 ]]; then
-    errorln "jq command not found..."
-    errorln
-    errorln "Follow the instructions in the Fabric docs to install the prereqs"
-    errorln "https://hyperledger-fabric.readthedocs.io/en/latest/prereqs.html"
-    exit 1
+  if ! command -v jq > /dev/null 2>&1; then
+    fatalln "jq command not found. Please install jq to proceed."
   fi
 }
 
 if [ "$SKIP_PACKAGING" != "true" ]; then
-  #check for prerequisites
   checkPrereqs
+fi
+
+if [ "$SKIP_NET_CHECK" != "true" ]; then
+  if ! checkNetworkContainersUp "quiet" 2>/dev/null; then
+    fatalln "The Fabric network is not running or missing required containers. Please start the network first using './network.sh up'."
+  elif [ "${VERBOSE:-false}" = "true" ]; then
+    task_successln "All peer and orderer containers are running"
+  fi
+fi
+
+if [ "${SKIP_HEADER:-false}" != "true" ]; then
+  headerln "Deploying Chaincode '${CC_NAME}' (v${CC_VERSION}) on Channel '${CHANNEL_NAME}'"
 fi
 
 # Verify if the channel exists on peer0 of Org1 before proceeding
@@ -92,22 +94,11 @@ if [ "$SKIP_CHANNEL_CHECK" != "true" ]; then
       read -p "Would you like to automatically create and join channel '${CHANNEL_NAME}'? [y/N]: " answer
       case "$answer" in
         [yY][eE][sS]|[yY])
-          # Check if the network is running
-          running=$("${CONTAINER_CLI}" ps --filter "label=service=hyperledger-fabric" --filter "status=running" -q)
-          if [ -z "$running" ]; then
-            warnln "Network is not running."
-            read -p "Would you like to automatically spin up the network? [y/N]: " net_answer
-            case "$net_answer" in
-              [yY][eE][sS]|[yY])
-                infoln "Starting network..."
-                ./network.sh up
-                ;;
-              *)
-                fatalln "Network is required to create channel. Exiting."
-                ;;
-            esac
+          if ! checkNetworkContainersUp "quiet" 2>/dev/null; then
+            warnln "Not all network containers are running. Starting network"
+            ./network.sh up
           fi
-          infoln "Creating channel '${CHANNEL_NAME}'..."
+          infoln "Creating channel '${CHANNEL_NAME}'"
           ./scripts/createChannel.sh "$CHANNEL_NAME" "$DELAY" "$MAX_RETRY" "$VERBOSE" 0 "true" "true"
           res=$?
           verifyResult $res "Channel creation/join failed"
@@ -123,57 +114,55 @@ if [ "$SKIP_CHANNEL_CHECK" != "true" ]; then
 fi
 
 if [ "$SKIP_PACKAGING" != "true" ]; then
-  ## package the chaincode (skips if already packaged)
+  sectionln "Packaging Chaincode"
   ./scripts/packageCC.sh $CC_NAME $CC_SRC_PATH $CC_SRC_LANGUAGE $CC_VERSION
 fi
 
+if [ "${VERBOSE:-false}" = "true" ]; then
+  println "${C_DIM}+ peer lifecycle chaincode calculatepackageid ${ROOTDIR}/channel-artifacts/packagedChaincode/${CC_NAME}_${CC_VERSION}.tar.gz${C_RESET}"
+fi
 PACKAGE_ID=$(peer lifecycle chaincode calculatepackageid ${ROOTDIR}/channel-artifacts/packagedChaincode/${CC_NAME}_${CC_VERSION}.tar.gz)
-infoln "PACKAGE_ID: ${PACKAGE_ID}"
+if [ "${VERBOSE:-false}" = "true" ]; then
+  infoln "Calculated Chaincode Package ID: ${C_BOLD_WHITE}${PACKAGE_ID}${C_RESET}"
+fi
 
-## Install chaincode on peers
+sectionln "1. Installing Chaincode on Peers"
 {{- range $i, $org := .Orgs }}
-  {{- if gt .PeerCount 0 }}
-infoln "Installing chaincode on peer0 for {{ .Name }}..."
-installChaincode {{ inc $i }}
+  {{- range $j, $p := until .PeerCount }}
+installChaincode {{ inc $i }} {{ $j }}
   {{- end }}
 {{- end }}
 
 resolveSequence
 
-## query whether the chaincode is installed
-queryInstalled 1
-
-## approve the definition for each org (skips if already approved)
+sectionln "2. Approving Chaincode Definition"
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
 approveForMyOrgIfNeeded {{ inc $i }}
   {{- end }}
 {{- end }}
 
-## check whether the chaincode definition is ready to be committed
-## expect them all to have approved
+sectionln "3. Checking Commit Readiness"
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
 checkCommitReadiness {{ inc $i }}{{ range $j, $org2 := $.Orgs }}{{ if gt $org2.PeerCount 0 }} "\"{{ $org2.MSPID }}\": true"{{ end }}{{ end }}
   {{- end }}
 {{- end }}
 
-## now that we know for sure all orgs have approved, commit the definition
+sectionln "4. Committing Chaincode Definition"
 commitChaincodeDefinition{{ range $i, $org := .Orgs }}{{ if gt .PeerCount 0 }} {{ inc $i }}{{ end }}{{ end }}
 
-## query on all orgs to see that the definition committed successfully
+sectionln "5. Verifying Committed Definition"
 {{- range $i, $org := .Orgs }}
   {{- if gt .PeerCount 0 }}
 queryCommitted {{ inc $i }}
   {{- end }}
 {{- end }}
 
-## Invoke the chaincode - this does require that the chaincode have the 'initLedger'
-## method defined
-if [ "$CC_INIT_FCN" = "NA" ]; then
-  infoln "Chaincode initialization is not required"
-else
+if [ "$CC_INIT_FCN" != "NA" ]; then
+  sectionln "6. Initializing Chaincode"
   chaincodeInvokeInit{{ range $i, $org := .Orgs }}{{ if gt .PeerCount 0 }} {{ inc $i }}{{ end }}{{ end }}
 fi
 
+successln "Chaincode '${CC_NAME}' deployed successfully."
 exit 0

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Central CCP Generator for all network organizations
+# This script reads ccp-template.json & ccp-template.yaml and generates per-org connection profiles.
+
+ORGS_DIR=$(cd "$(dirname "$0")" && pwd)
+ROOTDIR=$(cd "${ORGS_DIR}/.." && pwd)
+
+. "${ROOTDIR}/scripts/envVar.sh"
+
+function one_line_pem {
+    echo "$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0}' "$1" | sed 's/\\/\\\\/g')"
+}
+
+function json_ccp {
+    local org_name="$1" org_lower="$2" domain="$3" mspid="$4" caname="$5" caport="$6" p0port="$7" p1port="$8" peerpem="$9" capem="${10}"
+    local PP=$(one_line_pem "${peerpem}")
+    local CP=$(one_line_pem "${capem}")
+    sed -e "s#\${NETWORK_NAME}#{{ .NetworkName }}#g" \
+        -e "s#\${ORG_NAME}#${org_name}#g" \
+        -e "s#\${ORG_LOWER}#${org_lower}#g" \
+        -e "s#\${DOMAIN}#${domain}#g" \
+        -e "s#\${MSPID}#${mspid}#g" \
+        -e "s#\${CANAME}#${caname}#g" \
+        -e "s#\${CAPORT}#${caport}#g" \
+        -e "s#\${P0PORT}#${p0port}#g" \
+        -e "s#\${P1PORT}#${p1port}#g" \
+        -e "s#\${PEERPEM}#$PP#g" \
+        -e "s#\${CAPEM}#$CP#g" \
+        "${ORGS_DIR}/ccp-template.json" > "${ORGS_DIR}/${org_lower}/connection-${org_lower}.json"
+}
+
+function yaml_ccp {
+    local org_name="$1" org_lower="$2" domain="$3" mspid="$4" caname="$5" caport="$6" p0port="$7" p1port="$8" peerpem="$9" capem="${10}"
+    local PP=$(one_line_pem "${peerpem}")
+    local CP=$(one_line_pem "${capem}")
+    sed -e "s#\${NETWORK_NAME}#{{ .NetworkName }}#g" \
+        -e "s#\${ORG_NAME}#${org_name}#g" \
+        -e "s#\${ORG_LOWER}#${org_lower}#g" \
+        -e "s#\${DOMAIN}#${domain}#g" \
+        -e "s#\${MSPID}#${mspid}#g" \
+        -e "s#\${CANAME}#${caname}#g" \
+        -e "s#\${CAPORT}#${caport}#g" \
+        -e "s#\${P0PORT}#${p0port}#g" \
+        -e "s#\${P1PORT}#${p1port}#g" \
+        -e "s#\${PEERPEM}#$PP#g" \
+        -e "s#\${CAPEM}#$CP#g" \
+        "${ORGS_DIR}/ccp-template.yaml" > "${ORGS_DIR}/${org_lower}/connection-${org_lower}.yaml"
+}
+
+function generate_ccp_for_org() {
+    local org_idx="$1"
+    local force="${2:-false}"
+    local org_name=$(getOrgName "$org_idx")
+    local org_lower=$(getOrgDir "$org_idx")
+    local domain=$(getOrgDomain "$org_idx")
+    local mspid=$(getOrgMSP "$org_idx")
+    local caname=$(getOrgCAName "$org_idx")
+    local caport=$(getOrgCAPort "$org_idx")
+    local p0port=$(getOrgPeerPort "$org_idx" 0)
+    local p1port=$(getOrgPeerPort "$org_idx" 1)
+
+    local target_dir="${ORGS_DIR}/${org_lower}"
+    mkdir -p "${target_dir}"
+
+    local json_file="${target_dir}/connection-${org_lower}.json"
+    local yaml_file="${target_dir}/connection-${org_lower}.yaml"
+
+    if [ "$force" != "true" ] && [ -f "${json_file}" ] && [ -f "${yaml_file}" ]; then
+        infoln "Client Connection Profile for ${org_name} already exists. Skipping."
+        return 0
+    fi
+
+    local PEERPEM="${target_dir}/identities/peer/tlsca/tlsca.${domain}-cert.pem"
+    local CAPEM="${target_dir}/identities/peer/ca/ca.${domain}-cert.pem"
+
+    if [ ! -f "${PEERPEM}" ]; then
+        if [ -f "${target_dir}/ca/ca-cert.pem" ]; then
+            PEERPEM="${target_dir}/ca/ca-cert.pem"
+        elif [ -f "${target_dir}/identities/peer/peers/peer0.${domain}/tls/ca.crt" ]; then
+            PEERPEM="${target_dir}/identities/peer/peers/peer0.${domain}/tls/ca.crt"
+        else
+            PEERPEM=$(find "${target_dir}" \( -name "tlsca.*" -o -name "ca.crt" -o -name "ca-cert.pem" \) 2>/dev/null | head -n 1 || true)
+        fi
+    fi
+
+    if [ ! -f "${CAPEM}" ]; then
+        if [ -f "${target_dir}/ca/ca-cert.pem" ]; then
+            CAPEM="${target_dir}/ca/ca-cert.pem"
+        else
+            CAPEM="${PEERPEM}"
+        fi
+    fi
+
+    if [ -n "${PEERPEM}" ] && [ -f "${PEERPEM}" ] && [ -n "${CAPEM}" ] && [ -f "${CAPEM}" ]; then
+        if [ "${VERBOSE:-false}" = "true" ]; then
+            stepln "Generating connection profile for ${org_name}"
+        fi
+        json_ccp "${org_name}" "${org_lower}" "${domain}" "${mspid}" "${caname}" "${caport}" "${p0port}" "${p1port}" "${PEERPEM}" "${CAPEM}"
+        yaml_ccp "${org_name}" "${org_lower}" "${domain}" "${mspid}" "${caname}" "${caport}" "${p0port}" "${p1port}" "${PEERPEM}" "${CAPEM}"
+        if [ "${VERBOSE:-false}" = "true" ]; then
+            task_successln "Created connection-${org_lower}.json and connection-${org_lower}.yaml"
+        fi
+    else
+        if [ "${VERBOSE:-false}" = "true" ]; then
+            task_warnln "TLS CA certificates not found for ${org_name}. Skipping CCP generation."
+        fi
+    fi
+}
+
+TARGET_ORG="${1:-all}"
+FORCE="${2:-false}"
+
+if [ "$TARGET_ORG" != "all" ]; then
+    org_idx=$(getOrgIndex "$TARGET_ORG")
+    if verifyPeerOrg "$org_idx"; then
+        generate_ccp_for_org "$org_idx" "$FORCE"
+    fi
+else
+    {{- range $i, $org := .Orgs }}
+    {{- if gt .PeerCount 0 }}
+    generate_ccp_for_org {{ inc $i }} "$FORCE"
+    {{- end }}
+    {{- end }}
+fi
